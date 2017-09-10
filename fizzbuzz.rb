@@ -3,7 +3,11 @@ class FizzBuzzer
     if (((i % 5) == 0) && ((i % 3) == 0))
       "FizzBuzz"
     else
-      "Buzz"
+      if ((i % 5) == 0)
+        "Buzz"
+      else
+        "Fizz"
+      end
     end
   end
   def for_number_case(num)
