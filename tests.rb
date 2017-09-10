@@ -4,6 +4,9 @@ class FizzBuzzTests < Test::Unit::TestCase
   def setup
     @fizzbuzzer = FizzBuzzer.new
   end
+  def test_buzz
+    assert_equal("Buzz", @fizzbuzzer.for_number(5))
+  end
   def test_fizzbuzz
     assert_equal("FizzBuzz", @fizzbuzzer.for_number(15))
   end

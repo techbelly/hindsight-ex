@@ -1,6 +1,10 @@
 class FizzBuzzer
   def for_number(i)
-    "FizzBuzz"
+    if (((i % 5) == 0) && ((i % 3) == 0))
+      "FizzBuzz"
+    else
+      "Buzz"
+    end
   end
   def for_number_case(num)
     case
