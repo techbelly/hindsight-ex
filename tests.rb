@@ -7,6 +7,9 @@ class FizzBuzzTests < Test::Unit::TestCase
   def test_fizzbuzz
     assert_equal("FizzBuzz", @fizzbuzzer.for_number(15))
   end
+  def test_number_c
+    assert_equal("1", @fizzbuzzer.for_number_case(1))
+  end
   def test_fizz_c
     assert_equal("Fizz", @fizzbuzzer.for_number_case(3))
   end

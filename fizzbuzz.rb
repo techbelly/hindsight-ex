@@ -8,8 +8,10 @@ class FizzBuzzer
       "FizzBuzz"
     when ((num % 3) == 0)
       "Fizz"
-    else
+    when ((num % 5) == 0)
       "Buzz"
+    else
+      num.to_s
     end
   end
 end
