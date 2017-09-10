@@ -6,7 +6,11 @@ class FizzBuzzer
       if ((i % 5) == 0)
         "Buzz"
       else
-        "Fizz"
+        if ((i % 3) == 0)
+          "Fizz"
+        else
+          i.to_s
+        end
       end
     end
   end
