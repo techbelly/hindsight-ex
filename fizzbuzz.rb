@@ -26,4 +26,9 @@ class FizzBuzzer
       num.to_s
     end
   end
+  def run
+    1.upto(100) do |i|
+      puts(for_number_case(i))
+    end
+  end
 end
