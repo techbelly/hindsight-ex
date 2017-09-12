@@ -2,6 +2,7 @@
 
 require './tests.rb'
 require 'test/unit/collector/descendant'
+require './graph.rb'
 
 Test::Unit::AutoRunner.need_auto_run=false
 
@@ -33,6 +34,9 @@ while !candidate_tests.empty?
   smallest_candidate, lines_covered = results.min_by { |(_, lines)| lines.to_i }
   ordered_tests << smallest_candidate
   candidate_tests.delete(smallest_candidate)
+  Graph.add(smallest_candidate, results)
 end
+
+Graph.write("graph.dot")
 
 puts ordered_tests.join(" ")

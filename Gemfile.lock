@@ -1,0 +1,54 @@
+GEM
+  remote: https://rubygems.org/
+  specs:
+    abstract_type (0.0.7)
+    adamantium (0.2.0)
+      ice_nine (~> 0.11.0)
+      memoizable (~> 0.4.0)
+    ast (2.3.0)
+    coderay (1.1.2)
+    color (1.8)
+    concord (0.1.5)
+      adamantium (~> 0.2.0)
+      equalizer (~> 0.0.9)
+    css_color (1.0.1)
+      color
+    diff-lcs (1.3)
+    equalizer (0.0.11)
+    ice_nine (0.11.2)
+    memoizable (0.4.2)
+      thread_safe (~> 0.3, >= 0.3.1)
+    method_source (0.8.2)
+    parser (2.4.0.0)
+      ast (~> 2.2)
+    power_assert (0.2.6)
+    procto (0.0.3)
+    pry (0.10.4)
+      coderay (~> 1.1.0)
+      method_source (~> 0.8.1)
+      slop (~> 3.4)
+    slop (3.6.0)
+    test-unit (3.1.5)
+      power_assert
+    thread_safe (0.3.6)
+    unparser (0.2.6)
+      abstract_type (~> 0.0.7)
+      adamantium (~> 0.2.0)
+      concord (~> 0.1.5)
+      diff-lcs (~> 1.3)
+      equalizer (~> 0.0.9)
+      parser (>= 2.3.1.2, < 2.5)
+      procto (~> 0.0.2)
+
+PLATFORMS
+  ruby
+
+DEPENDENCIES
+  css_color
+  parser
+  pry
+  test-unit
+  unparser
+
+BUNDLED WITH
+   1.15.4
