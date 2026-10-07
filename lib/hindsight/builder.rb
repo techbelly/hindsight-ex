@@ -40,6 +40,7 @@ module Hindsight
       @included = []    # tests committed as steps so far
       @full_ids = Set.new # tests whose library footprint is in the union
       @deferred = []    # tests nothing short of everything would satisfy
+      @retries = Hash.new(0)
       @last_failures = []
       @red = {}         # test id => true if the previous fold run saw it fail
       @sources = {}
@@ -72,6 +73,19 @@ module Hindsight
           ok = timed("verify") { verify(n, test) }
           unless ok
             ok, escalated, outputs = timed("escalate") { escalate(n, test, pending) }
+          end
+          if ok == :retry
+            # This test's code broke tests already in the history. Try it
+            # again later, when more of the code is in place.
+            @included.delete(test)
+            @full_ids.delete(test.id)
+            @failures.reject! { |fn, _| fn == n }
+            pending << test
+            outputs = slice_all(union_now)
+            sync(outputs)
+            @log.puts format("↻ %4d  %4d left  %s (breaks earlier tests; retried later)", n, pending.size, test.description[0, 70])
+            n -= 1
+            next
           end
           unless ok
             # Nothing short of the whole project satisfies this test. Leave it
@@ -358,6 +372,7 @@ module Hindsight
     FOLD_TIMEOUT = 15
     VERIFY_TIMEOUT = 120
     MAX_FOLD_BACKOFF = 8
+    MAX_RETRIES = 2
     TEST_TIMEOUT = 10 # seconds per test inside a probe run
 
     # A fold run's budget scales with the file: a few hundred tests all
@@ -478,6 +493,13 @@ module Hindsight
           broken.each { |t| made << [t.description[0, 60], :unfold]; @escalations << [n, t.id, :unfold] }
           return succeed.call(outputs)
         end
+      end
+
+      # The step's own test passes but others in the history now fail: its
+      # code interferes with theirs. Retry it later rather than regress.
+      others = @last_failures.reject { |id| id == test.id }
+      if others.any? && !@last_failures.include?(test.id) && (@retries[test.id] += 1) <= MAX_RETRIES
+        return [:retry, made, nil]
       end
 
       # Everything the suite loaded, as structure.
