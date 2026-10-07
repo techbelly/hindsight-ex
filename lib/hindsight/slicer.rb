@@ -355,9 +355,9 @@ module Hindsight
           args = s.children[2..]
           next unless args.any? && args.all? { |a| node?(a) && a.type == :sym }
           keep_args = args.reject { |a| dropped.include?(a.children[0]) }
-          if keep_args.empty?
-            entry[1] = false
-          elsif keep_args.size < args.size && !multiline?(s)
+          if keep_args.empty? || (keep_args.size < args.size && multiline?(s))
+            entry[1] = false # visibility is safe to lose; a multi-line list can't be trimmed
+          elsif keep_args.size < args.size
             from, to = args.first.loc.expression, args.last.loc.expression
             @editor.replace(from.line, from.column, to.end.column, keep_args.map { |a| a.loc.expression.source }.join(", "))
           end
@@ -404,9 +404,9 @@ module Hindsight
             drop.call(stmt) if dropped.include?([scope, sym_name(args.last)])
           else
             keep_args = args.reject { |a| dropped.include?([scope, sym_name(a)]) }
-            if keep_args.empty?
+            if keep_args.empty? || (keep_args.size < args.size && multiline?(s))
               drop.call(stmt)
-            elsif keep_args.size < args.size && !multiline?(s)
+            elsif keep_args.size < args.size
               from, to = args.first.loc.expression, args.last.loc.expression
               @editor.replace(from.line, from.column, to.end.column, keep_args.map { |a| a.loc.expression.source }.join(", "))
             end

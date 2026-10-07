@@ -584,4 +584,20 @@ class SlicerTest < Minitest::Test
     assert_includes out, "def development?"
     refute_includes out, "def test?"
   end
+
+  def test_multiline_visibility_lists_naming_dropped_things_are_dropped
+    out = slice(<<~RUBY, referenced: [:DOT])
+      class H
+        DOT = "."
+        PORT = /x/
+        private_constant :DOT,
+                         :PORT
+        def go     #L
+          1        #R
+        end
+      end
+    RUBY
+    refute_includes out, "private_constant"
+    assert_includes out, 'DOT = "."'
+  end
 end
