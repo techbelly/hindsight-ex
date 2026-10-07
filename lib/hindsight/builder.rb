@@ -57,6 +57,7 @@ module Hindsight
       until pending.empty?
         test = pending.shift
         n += 1
+        @step_now = n
         was_red = @red.key?(test.id) # seen failing on the previous tree
         test.lines.each { |f, ls| union[f].merge(ls) }
         outputs = timed("slice") { slice_all(union) }
@@ -147,7 +148,7 @@ module Hindsight
         end
         drop_hollow(new_outputs)
         refs = new_outputs.values.map { |t| Slicer.referenced_constants(t) }.reduce(Set.new, :|)
-        meths = new_outputs.values.map { |t| Slicer.referenced_methods(t) }.reduce(Set.new, :|)
+        meths = new_outputs.values.map { |t| Slicer.referenced_methods(t, defined: project_defined_methods) }.reduce(Set.new, :|)
         wholes = new_outputs.values.map { |t| Slicer.whole_classes(t) }.reduce(Set.new, :|)
         uses = new_outputs.values.map { |t| Slicer.used_methods(t) }.reduce(Set.new, :|)
         kept_defined = new_outputs.values.map { |t| Slicer.defined_methods(t) }.reduce(Set.new, :|)
@@ -302,8 +303,20 @@ module Hindsight
       sync(tree)
       # One run per test file, in parallel, each with a short timeout: a
       # pending test that loops forever in this tree must not stall the step.
-      files = pending.map(&:file).uniq
-      results = parallel_map(files) { |f| run_with_probe(only_file: f, timeout: FOLD_TIMEOUT)[2] }.compact
+      # A file that timed out recently loops forever in this tree; leave it
+      # out for a while, doubling the wait each time it happens again.
+      @fold_skip ||= {}
+      files = pending.map(&:file).uniq.reject { |f| (@fold_skip[f] || 0) > @step_now }
+      results = parallel_map(files) do |f|
+        out, status, rec = run_with_probe(only_file: f, timeout: FOLD_TIMEOUT)
+        if status.nil? && out.include?("timed out")
+          @fold_backoff ||= Hash.new(1)
+          @fold_skip[f] = @step_now + @fold_backoff[f]
+          @fold_backoff[f] *= 2
+          @log.puts "    fold: #{f} timed out; skipping it for #{@fold_backoff[f] / 2} step(s)" if ENV["HINDSIGHT_TRACE"]
+        end
+        rec
+      end.compact
       tests = results.flat_map(&:tests)
       passed = tests.select(&:passed).map(&:id).to_set
       @red = tests.reject(&:passed).to_h { |t| [t.id, true] }
@@ -312,7 +325,7 @@ module Hindsight
       sync(committed) if committed
     end
 
-    FOLD_TIMEOUT = 30
+    FOLD_TIMEOUT = 15
     VERIFY_TIMEOUT = 120
 
     def parallel_map(items, workers: Etc.nprocessors)

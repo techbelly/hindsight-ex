@@ -223,16 +223,16 @@ module Hindsight
     # any symbol passed to a call that happens to name a method this source
     # defines (`default_reaction :deny`, `before_action :check`): class-level
     # DSL that will reach for the method by name.
-    def self.referenced_methods(source)
+    def self.referenced_methods(source, defined: nil)
       names = Set.new
-      defined = defined_methods(source)
+      defined ||= defined_methods(source)
       walk(parse(source)) do |n|
         next unless n.type == :send
         syms = n.children[2..].select { |a| a.is_a?(Parser::AST::Node) && a.type == :sym }.map { |a| a.children[0] }
         if REFLECTION.include?(n.children[1])
           names << syms.first if syms.first
         elsif !ATTRS.include?(n.children[1]) && !METHOD_REFERENCING.include?(n.children[1])
-          names.merge(syms & defined.to_a)
+          syms.each { |sym| names << sym if defined.include?(sym) }
         end
       end
       names
