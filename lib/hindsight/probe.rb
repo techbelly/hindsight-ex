@@ -11,6 +11,7 @@
 
 require "coverage"
 require "json"
+require "timeout"
 
 Coverage.start(lines: true, branches: true)
 
@@ -45,6 +46,17 @@ module Hindsight
     OUT  = ENV.fetch("HINDSIGHT_OUT", "hindsight-coverage.json")
     ONLY = ENV["HINDSIGHT_ONLY"]           # run just this test id
     ONLY_FILE = ENV["HINDSIGHT_ONLY_FILE"] # run just the tests defined in this file (relative to ROOT)
+    # Seconds a single test may take. In a partial tree a loop whose body was
+    # cut away never ends; this turns that into one failed test instead of a
+    # hung process.
+    TEST_TIMEOUT = ENV["HINDSIGHT_TEST_TIMEOUT"]&.to_f
+
+    def self.bounded
+      return yield unless TEST_TIMEOUT && TEST_TIMEOUT > 0
+      Timeout.timeout(TEST_TIMEOUT, TestTimedOut) { yield }
+    end
+
+    class TestTimedOut < StandardError; end
 
     def self.selected?(id, file = nil)
       return false if ONLY && ONLY != id
@@ -180,7 +192,12 @@ module Hindsight
           return Minitest::Result.from(self)
         end
         Hindsight::Probe.before_test
-        result = super
+        result = begin
+          Hindsight::Probe.bounded { super }
+        rescue Hindsight::Probe::TestTimedOut => e
+          failures << Minitest::UnexpectedError.new(e)
+          Minitest::Result.from(self)
+        end
         file, line = method(name).source_location
         desc = self.class.respond_to?(:desc) ? "#{self.class.desc} #{name.sub(/\Atest_\d+_/, "")}" : "#{self.class.name}##{name}"
         Hindsight::Probe.after_test(
@@ -207,7 +224,7 @@ module Hindsight
         config.around(:each) do |example|
           next example.skip("not selected by hindsight") unless Hindsight::Probe.selected?(example.id, example.metadata[:absolute_file_path])
           Hindsight::Probe.before_test
-          example.run
+          Hindsight::Probe.bounded { example.run }
           Hindsight::Probe.after_test(
             id: example.id,
             description: example.full_description,

@@ -358,6 +358,7 @@ module Hindsight
     FOLD_TIMEOUT = 15
     VERIFY_TIMEOUT = 120
     MAX_FOLD_BACKOFF = 8
+    TEST_TIMEOUT = 10 # seconds per test inside a probe run
 
     # A fold run's budget scales with the file: a few hundred tests all
     # exercising error paths in a partial tree take a while, and that is not
@@ -386,7 +387,7 @@ module Hindsight
     def run_with_probe(lenient: true, only_file: nil, timeout: VERIFY_TIMEOUT)
       Dir.mktmpdir("hindsight") do |tmp|
         out = File.join(tmp, "run.json")
-        env = { "HINDSIGHT_ROOT" => @out, "HINDSIGHT_OUT" => out }
+        env = { "HINDSIGHT_ROOT" => @out, "HINDSIGHT_OUT" => out, "HINDSIGHT_TEST_TIMEOUT" => TEST_TIMEOUT.to_s }
         env["HINDSIGHT_LENIENT"] = "1" if lenient
         env["HINDSIGHT_ONLY_FILE"] = only_file if only_file
         output, status = Project.run_in(@out, @test_command, env: env, rubyopt: "-I#{Recorder::LIB} -rhindsight/probe", timeout: timeout)
