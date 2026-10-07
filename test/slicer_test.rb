@@ -348,4 +348,25 @@ class SlicerTest < Minitest::Test
     assert_includes out, "def self.setup"
     refute_includes out, "unused"
   end
+
+  def test_comments_are_stripped_except_magic_ones
+    src = <<~RUBY
+      # frozen_string_literal: true
+      # Describes the class.
+      class A
+        X = "a # not a comment" # trailing
+      =begin
+      block
+      =end
+        def go; end
+      end
+    RUBY
+    assert_equal <<~RUBY, Hindsight::Comments.strip(src)
+      # frozen_string_literal: true
+      class A
+        X = "a # not a comment"
+        def go; end
+      end
+    RUBY
+  end
 end

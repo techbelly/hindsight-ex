@@ -91,7 +91,7 @@ module Hindsight
         present.each do |f|
           case Slicer.parseable?(source(f)) ? @levels[f] : :full
           when :full
-            new_outputs[f] = source(f)
+            new_outputs[f] = Comments.strip(source(f))
             next
           when :structure
             refs = EVERYTHING
@@ -105,7 +105,7 @@ module Hindsight
           keep = union[f].any? || res.substantive || @project.test_file?(f) || @levels[f] != :sliced ||
                  @structural_now.include?(f) ||
                  (Slicer.parseable?(source(f)) && (Slicer.defined_constants(source(f)) & referenced).any?)
-          new_outputs[f] = res.text if keep
+          new_outputs[f] = Comments.strip(res.text) if keep
         end
         refs = new_outputs.values.map { |t| Slicer.referenced_constants(t) }.reduce(Set.new, :|)
         meths = new_outputs.values.map { |t| Slicer.referenced_methods(t) }.reduce(Set.new, :|)
@@ -323,7 +323,15 @@ module Hindsight
     end
 
     def write_everything
-      @project.files.each { |f| copy(f) }
+      @project.files.each do |f|
+        if @project.ruby_file?(f) && Slicer.parseable?(source(f))
+          dest = File.join(@out, f)
+          FileUtils.mkdir_p(File.dirname(dest))
+          File.write(dest, Comments.strip(source(f)))
+        else
+          copy(f)
+        end
+      end
     end
 
     def copy(f)

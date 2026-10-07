@@ -50,7 +50,7 @@ module Hindsight
         end
         out << text
       end
-      tidy(out)
+      self.class.tidy(out.join)
     end
 
     private
@@ -64,8 +64,7 @@ module Hindsight
       end
     end
 
-    def tidy(out)
-      text = out.join
+    def self.tidy(text)
       text = text.gsub(/\n{3,}/, "\n\n")                       # squeeze blank runs
       text = text.gsub(/\n\n(\s*end\b)/, "\n\\1")              # no blank line before end
       text = text.gsub(/^([ \t]*(?:class|module|def)\b[^\n]*\n|[^\n]*\bdo(?: \|[^|\n]*\|)?\n)\n+/, "\\1") # none after opener

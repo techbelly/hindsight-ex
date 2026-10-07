@@ -64,6 +64,19 @@ module Hindsight
       end
     end
 
+    def self.parse_with_comments(source)
+      buffer = Parser::Source::Buffer.new("(src)", source: source)
+      if defined?(Prism::Translation::Parser)
+        parser = Prism::Translation::Parser.new
+        parser.diagnostics.all_errors_are_fatal = false
+        parser.diagnostics.ignore_warnings = true
+        parser.diagnostics.consumer = ->(_d) {}
+        parser.parse_with_comments(buffer)
+      else
+        Parser::CurrentRuby.new.parse_with_comments(buffer)
+      end
+    end
+
     # Can this source be sliced at all?
     def self.parseable?(source)
       !parse(source).nil?
