@@ -22,7 +22,8 @@ Four stages, each leaving a file in `work/<project>/`:
    Output: `coverage.json`.
 2. **order** picks the sequence greedily: at each step the test that needs the
    fewest new production lines goes next, the TDD instinct of taking the
-   smallest step. Ties go to tests near the previous one in the same file.
+   smallest step. An affinity penalty keeps the story in one test file and
+   one area of the code until a test elsewhere is clearly cheaper.
    Output: `plan.json` and a Graphviz `graph.dot` of the choices.
 3. **build** replays the plan into a fresh repository. For each step it slices
    every source file down to the lines the tests so far have needed, working
@@ -30,16 +31,29 @@ Four stages, each leaving a file in `work/<project>/`:
    formatting survive. Conditionals lose the branches no test has entered;
    rescue clauses nobody triggered disappear; classes appear when first
    referenced; `require`s of files that don't exist yet are dropped.
+   Attributes and constants appear when something uses them. Comments go.
    Output: `repo/`.
-4. **verify** (optional, `--verify`) runs the suite at every step. When it
+4. **verify** (optional, `--verify`) runs the suite at every step. After a
+   green step every not-yet-added test is tried against the new code, and
+   those that already pass are folded into the commit as further examples,
+   so each commit changes production code. When verification
    fails, the builder escalates one rung at a time until it is green again:
+   merge the recorded footprint of a folded test the new code has broken;
    re-record that single test in isolation (only useful after `--fast`);
-   treat one class as referenced, trying each class the suspect files declare
-   in turn; keep one file's classes as bare structure; keep one file whole.
-   Each escalation is noted in the commit message and sticks for later steps.
+   treat one class or constant as referenced, trying each the suspect files
+   declare in turn; keep one file's classes as bare structure; keep one file
+   whole. Each escalation is noted in the commit message and sticks.
 
-The first commit holds the non-Ruby scaffolding (gemspec, README, licence).
-The last commit adds whatever no test ever reached.
+Commit subjects are the test descriptions. Bodies say what the step did in
+code terms (classes introduced, methods added or extended), list the tests
+folded in, and record verification. Dates are spread across the original
+project's lifetime in proportion to lines added. The first commit holds the
+non-Ruby scaffolding; the last adds whatever no test ever reached.
+
+`bin/hindsight-score REPO` measures a history: commits, commits adding no
+code, step-size percentiles, hops between test files, escalations, and lines
+left for the final commit. Every change to the slicer or orderer is judged
+against those numbers on the exemplars below.
 
 ## Usage
 
@@ -59,20 +73,21 @@ project's own test dependencies must be installed for its Ruby.
 
 ## Results so far
 
-| project  | tests | lines | time with verify | escalations | left for the last commit |
-|----------|------:|------:|-----------------:|-------------|-------------------------:|
-| slop     |   100 |  1.7k |             12 s | 2, both dynamic constant lookups | 26 lines |
-| mustache |   112 |  1.9k |             22 s | 3: two isolation re-records, one fixture as structure | 117 lines |
-| liquid   | 1,062 |  7.1k |          8 m 14 s | 1 isolation re-record | 226 lines |
+| project  | tests | lines | commits | median step | p90 | hops | escalations | time |
+|----------|------:|------:|--------:|------------:|----:|-----:|------------:|-----:|
+| slop     |   100 |  1.7k |      45 |           6 |  35 |    9 | 5 | 15 s |
+| mustache |   112 |  1.9k |      51 |          12 |  47 |   12 | 2 | 40 s |
+| liquid   | 1,062 |  7.1k |   1,064 |           0 |     |      | 0 | 16 m |
+
+Liquid's row predates folding and will shrink considerably.
 
 Every step of every history above is green. Liquid's first step is large
 (about 1,300 lines) because its test helper builds the default Environment at
 load, which drags in the tag and filter tables. That is honest: nothing less
 boots.
 
-Commit messages are the test descriptions. Improving them, for instance with
-a language model reading each diff, is deliberately left as a separate pass
-over the finished history.
+Improving the prose further, for instance with a language model reading each
+diff, is deliberately left as a separate pass over the finished history.
 
 ## Limits worth knowing
 

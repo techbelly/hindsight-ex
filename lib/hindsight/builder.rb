@@ -43,11 +43,13 @@ module Hindsight
 
     def build
       reset_repo
+      @clock = Clock.new(@project, @steps.size)
       write_scaffold
-      commit("Project scaffolding", "Build files, documentation and licences. No code yet.")
+      commit("Project scaffolding", "Build files, documentation and licences. No code yet.", date: @clock.start)
 
       union = Hash.new { |h, k| h[k] = Set.new }
       previous_sizes = {}
+      previous_outputs = {}
       pending = @steps.map { |st| @record.test(st.id) }
       n = 0
       until pending.empty?
@@ -80,14 +82,16 @@ module Hindsight
           end
         end
         sizes = outputs.transform_values { |t| t.lines.size }
-        commit(test.description, step_body(n, test, sizes, previous_sizes, ok, escalated, folded))
+        story = Narrator.describe(previous_outputs, outputs, @project)
+        commit(subject_for(test), step_body(n, test, sizes, previous_sizes, ok, escalated, folded, story), date: @clock.tick(sizes, previous_sizes))
         previous_sizes = sizes
+        previous_outputs = outputs
         progress(n, pending.size, test, ok, escalated, folded)
       end
       @step_count = n
 
       write_everything
-      commit("Everything else", "Code no test reached, and files the test suite never loaded.")
+      commit("Everything else", "Code no test reached, and files the test suite never loaded.", date: @clock.finish)
       @log.puts "\nBuilt #{@step_count + 2} commits in #{@out} (#{@steps.size} tests)"
       @log.puts "Escalations: #{@escalations.map { |n, f, l| l == :class || l == :footprint ? "#{l} #{f[0, 50]} at step #{n}" : "#{f} to #{l} at step #{n}" }.join('; ')}" if @escalations.any?
       @log.puts "#{@failures.size} step(s) still failing: #{@failures.map(&:first).join(', ')}" if @failures.any?
@@ -225,6 +229,35 @@ module Hindsight
     end
 
     def source(f) = @sources[f] ||= @project.read(f)
+
+    # Spreads commit dates across the original project's real lifetime, in
+    # proportion to lines added, so the log reads like a history.
+    class Clock
+      def initialize(project, steps)
+        first, = Open3.capture2("git", "-C", project.root, "log", "--reverse", "--format=%at")
+        last, = Open3.capture2("git", "-C", project.root, "log", "-1", "--format=%at")
+        @start = first.lines.first.to_i
+        @finish = last.strip.to_i
+        @start = @finish - 365 * 86_400 if @start.zero? || @start >= @finish
+        @total = nil
+        @steps = [steps, 1].max
+        @done = 0
+        @now = @start
+      end
+
+      def start = fmt(@start)
+      def finish = fmt(@finish)
+      def fmt(t) = Time.at(t).utc.strftime("%Y-%m-%dT%H:%M:%S +0000")
+
+      def tick(sizes, previous)
+        added = sizes.sum { |f, s| [s - (previous[f] || 0), 0].max } + 5
+        @done += 1
+        # Advance by a share of the remaining span weighted toward step size.
+        share = (@finish - @now) * (1.0 / [(@steps - @done + 1), 1].max) * (0.5 + [added, 60].min / 60.0)
+        @now = [@now + share.to_i + 3600, @finish - 3600].min
+        fmt(@now)
+      end
+    end
 
     # ----- folding -------------------------------------------------------
 
@@ -473,26 +506,42 @@ module Hindsight
       @written = outputs.keys.to_set
     end
 
-    def git(*args)
-      out, status = Open3.capture2e("git", "-C", @out, *args)
+    def git(*args, env: {})
+      out, status = Open3.capture2e(env, "git", "-C", @out, *args)
       raise Error, "git #{args.first} failed: #{out}" unless status.success?
       out
     end
 
-    def commit(subject, body)
+    def commit(subject, body, date: nil)
       git("add", "-A")
-      git("commit", "-q", "--allow-empty", "-m", subject, "-m", body)
+      env = date ? { "GIT_AUTHOR_DATE" => date, "GIT_COMMITTER_DATE" => date } : {}
+      git("commit", "-q", "--allow-empty", "-m", subject, "-m", body, env: env)
     end
 
-    def step_body(n, test, sizes, previous, ok, escalated, folded = [])
+    # "FooTest#test_does_a_thing" reads better as "Foo: does a thing".
+    # Spec-style descriptions are already prose and pass through.
+    def subject_for(test)
+      humanise(test.description)
+    end
+
+    def humanise(desc)
+      if (m = desc.match(/\A([\w:]+)#test_(?:\d+_)?(.+)\z/))
+        "#{m[1].sub(/Test\z/, '')}: #{m[2].tr('_', ' ')}"
+      else
+        desc
+      end
+    end
+
+    def step_body(n, test, sizes, previous, ok, escalated, folded = [], story = [])
       deltas = sizes.map { |f, s| [f, s - (previous[f] || 0)] }.reject { |_, d| d.zero? }
       prod = deltas.reject { |f, _| @project.test_file?(f) }.sum(&:last)
       lines = []
+      lines.concat(story) << "" if story.any?
       lines << "Step #{n}. #{prod} line#{'s' unless prod == 1} of production code."
       lines << "Test: #{test.file}:#{test.line}"
       unless folded.empty?
         lines << "" << "Also passing now:"
-        folded.each { |t| lines << "  #{t.description} (#{t.file}:#{t.line})" }
+        folded.each { |t| lines << "  #{humanise(t.description)} (#{t.file}:#{t.line})" }
       end
       unless deltas.empty?
         lines << ""
