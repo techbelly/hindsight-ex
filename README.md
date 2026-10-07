@@ -33,9 +33,10 @@ Four stages, each leaving a file in `work/<project>/`:
    Output: `repo/`.
 4. **verify** (optional, `--verify`) runs the suite at every step. When it
    fails, the builder escalates one rung at a time until it is green again:
-   re-record that single test in isolation (only useful after `--fast`); keep
-   one file's classes as bare structure; keep one file whole. Each escalation
-   is noted in the commit message and sticks for later steps.
+   re-record that single test in isolation (only useful after `--fast`);
+   treat one class as referenced, trying each class the suspect files declare
+   in turn; keep one file's classes as bare structure; keep one file whole.
+   Each escalation is noted in the commit message and sticks for later steps.
 
 The first commit holds the non-Ruby scaffolding (gemspec, README, licence).
 The last commit adds whatever no test ever reached.

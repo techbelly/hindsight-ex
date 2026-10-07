@@ -34,6 +34,7 @@ module Hindsight
       @escalations = []
       @levels = Hash.new(:sliced)
       @structural_now = Set.new
+      @forced = Set.new # constants to treat as referenced from now on
       @sources = {}
       @written = Set.new
     end
@@ -68,7 +69,7 @@ module Hindsight
       write_everything
       commit("Everything else", "Code no test reached, and files the test suite never loaded.")
       @log.puts "\nBuilt #{@steps.size + 2} commits in #{@out}"
-      @log.puts "Escalations: #{@escalations.map { |n, f, l| "#{f} to #{l} at step #{n}" }.join('; ')}" if @escalations.any?
+      @log.puts "Escalations: #{@escalations.map { |n, f, l| l == :class ? "class #{f} at step #{n}" : "#{f} to #{l} at step #{n}" }.join('; ')}" if @escalations.any?
       @log.puts "#{@failures.size} step(s) still failing: #{@failures.map(&:first).join(', ')}" if @failures.any?
       @out
     end
@@ -76,7 +77,7 @@ module Hindsight
     # Slice every file that should exist at this point. Iterates because what
     # is referenced depends on what is kept, and vice versa.
     def slice_all(union)
-      referenced = Set.new
+      referenced = @forced.dup
       methods = Set.new
       whole = Set.new
       outputs = {}
@@ -117,7 +118,7 @@ module Hindsight
         changed = new_outputs != outputs || refs != referenced || meths != methods || wholes != whole
         outputs = new_outputs
         kept = outputs.keys.to_set
-        referenced = refs
+        referenced = refs | @forced
         methods = meths
         whole = wholes
         break unless changed
@@ -222,6 +223,29 @@ module Hindsight
         end
       end
 
+      # One class at a time: something looked a class up by name
+      # (`const_defined?`), so try each class the suspect files declare.
+      tried = 0
+      candidates.each do |f|
+        break if tried >= MAX_CLASS_ATTEMPTS
+        next unless @levels[f] == :sliced && Slicer.parseable?(source(f))
+        already = outputs_declare(f)
+        (Slicer.declared_constants(source(f)) - already - @forced).each do |name|
+          break if tried >= MAX_CLASS_ATTEMPTS
+          tried += 1
+          @forced << name
+          outputs = slice_all(union)
+          sync(outputs)
+          if verify(n, test, quiet: true, label: "class-#{name}")
+            made << [name, :class]
+            @escalations << [n, name, :class]
+            @failures.reject! { |fn, _| fn == n }
+            return [true, made, outputs]
+          end
+          @forced.delete(name)
+        end
+      end
+
       # One file at a time, most suspicious first; every file as structure
       # before any file in full, so the smallest fix wins.
       LEVELS.drop(1).each do |level|
@@ -284,6 +308,13 @@ module Hindsight
     end
 
     MAX_CANDIDATES = 15
+    MAX_CLASS_ATTEMPTS = 40
+
+    # Classes the current output for +f+ already declares.
+    def outputs_declare(f)
+      path = File.join(@out, f)
+      File.exist?(path) ? Slicer.declared_constants(File.read(path)) : Set.new
+    end
 
     # Files to suspect, in order: those named in the failure output, those
     # defining a constant the output names, those the failing test itself
@@ -391,7 +422,7 @@ module Hindsight
       end
       unless ok.nil?
         lines << "" << "Verification: #{ok ? 'green' : 'RED'}"
-        escalated.each { |f, level| lines << "  needed #{f} as #{level}" }
+        escalated.each { |f, level| lines << (level == :class ? "  needed class #{f}" : "  needed #{f} as #{level}") }
       end
       lines.join("\n")
     end
