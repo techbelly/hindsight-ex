@@ -626,4 +626,17 @@ class SlicerTest < Minitest::Test
     assert_includes out, "def deny"
     refute_includes out, "def report"
   end
+
+  def test_a_dead_branch_that_assigns_a_local_keeps_its_conditional
+    out = slice(<<~RUBY)
+      def call(env)
+        unless accepts? env     #R
+          instrument env
+          result = react env
+        end
+        result or @app.call(env)   #R
+      end
+    RUBY
+    assert_includes out, "result = react env"
+  end
 end

@@ -746,6 +746,13 @@ module Hindsight
       keep_clause = clauses.map { |_, body| node?(body) && executed?(body) }
       keep_else = node?(else_body) && executed?(else_body)
 
+      # A dead branch that assigns a local variable still declares it for the
+      # code after the conditional. Cutting it would turn nil into a
+      # NameError, so such a conditional stays whole.
+      dead = clauses.each_with_index.reject { |_, i| keep_clause[i] }.map { |(_, body), _| body }
+      dead << else_body unless keep_else
+      return :substantive if dead.any? { |b| assigns_local?(b) }
+
       # Line extents of each clause: from its keyword line to the line before the next part.
       boundaries = clauses.map { |k, _| k.line } + [else_kw&.line, end_line].compact
 
@@ -825,6 +832,13 @@ module Hindsight
       else
         n.children.all? { |c| pure?(c) }
       end
+    end
+
+    def assigns_local?(n)
+      return false unless node?(n)
+      found = false
+      self.class.walk(n) { |c| found = true if %i[lvasgn masgn op_asgn or_asgn and_asgn].include?(c.type) && (c.type != :op_asgn && c.type != :or_asgn && c.type != :and_asgn || c.children[0].type == :lvasgn) }
+      found
     end
 
     def branches(n)

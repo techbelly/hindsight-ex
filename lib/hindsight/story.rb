@@ -7,14 +7,27 @@ module Hindsight
   # a table of contents, with the commits grouped into chapters by the test
   # file that drove them.
   class Story
-    def initialize(project, out, record)
+    def initialize(project, out, record, deferred: [])
       @project = project
       @out = out
       @record = record
+      @deferred = deferred
     end
 
     def render
-      [header, toc].join("\n")
+      parts = [header, toc]
+      parts << deferred_section if @deferred.any?
+      parts.join("\n")
+    end
+
+    def deferred_section
+      lines = ["## Not told test by test", ""]
+      lines << "These tests depend on something no partial tree can provide (a fixture that"
+      lines << "is another test file's size, say). They arrive with the final commit."
+      lines << ""
+      @deferred.each { |d| lines << "- #{d}" }
+      lines << ""
+      lines.join("\n")
     end
 
     private

@@ -37,6 +37,9 @@ module Hindsight
       @structural_now = Set.new
       @forced = Set.new # constants to treat as referenced from now on
       @folded = {}      # tests folded into earlier steps, by id
+      @included = []    # tests committed as steps so far
+      @full_ids = Set.new # tests whose library footprint is in the union
+      @deferred = []    # tests nothing short of everything would satisfy
       @last_failures = []
       @red = {}         # test id => true if the previous fold run saw it fail
       @sources = {}
@@ -49,7 +52,6 @@ module Hindsight
       write_scaffold
       commit("Project scaffolding", "Build files, documentation and licences. No code yet.", date: @clock.start)
 
-      union = Hash.new { |h, k| h[k] = Set.new }
       previous_sizes = {}
       previous_outputs = {}
       pending = @steps.map { |st| @record.test(st.id) }
@@ -59,8 +61,9 @@ module Hindsight
         n += 1
         @step_now = n
         was_red = @red.key?(test.id) # seen failing on the previous tree
-        test.lines.each { |f, ls| union[f].merge(ls) }
-        outputs = timed("slice") { slice_all(union) }
+        @included << test
+        @full_ids << test.id
+        outputs = timed("slice") { slice_all(union_now) }
         sync(outputs)
         ok = nil
         escalated = []
@@ -68,19 +71,29 @@ module Hindsight
         if @verify
           ok = timed("verify") { verify(n, test) }
           unless ok
-            ok, escalated, outputs = timed("escalate") { escalate(n, test, union) }
+            ok, escalated, outputs = timed("escalate") { escalate(n, test, pending) }
           end
-          if ok && pending.any?
-            folded = timed("fold") { fold_passing(union, pending) }
+          unless ok
+            # Nothing short of the whole project satisfies this test. Leave it
+            # for the end rather than let it swallow the story.
+            @included.delete(test)
+            @full_ids.delete(test.id)
+            @deferred << test
+            @failures.reject! { |fn, _| fn == n }
+            outputs = slice_all(union_now)
+            sync(outputs)
+            @log.puts format("⊘ %4d  %4d left  %s (deferred: cannot be satisfied incrementally)", n, pending.size, test.description[0, 70])
+            n -= 1
+            next
+          end
+          if pending.any?
+            folded = timed("fold") { fold_passing(union_now, pending) }
             unless folded.empty?
               pending -= folded
               # Only their test code joins now. If a later step routes one of
               # them down a path that needs more, its footprint is merged then.
-              folded.each do |t|
-                @folded[t.id] = t
-                t.lines.each { |f, ls| union[f].merge(ls) if @project.test_file?(f) }
-              end
-              outputs = slice_all(union)
+              folded.each { |t| @folded[t.id] = t }
+              outputs = slice_all(union_now)
               sync(outputs)
             end
           end
@@ -95,13 +108,29 @@ module Hindsight
       @step_count = n
 
       write_everything
-      commit("Everything else", "Code no test reached, and files the test suite never loaded.", date: @clock.finish)
-      File.write(File.join(@out, "HINDSIGHT.md"), Story.new(@project, @out, @record).render)
+      body = +"Code no test reached, and files the test suite never loaded."
+      body << "\n\nTests that could not be satisfied incrementally:\n" << @deferred.map { |t| "  #{humanise(t.description)} (#{t.file}:#{t.line})" }.join("\n") if @deferred.any?
+      commit("Everything else", body, date: @clock.finish)
+      File.write(File.join(@out, "HINDSIGHT.md"), Story.new(@project, @out, @record, deferred: @deferred.map { |t| humanise(t.description) }).render)
       commit("Explain where this history came from", "Provenance and a table of contents, generated.", date: @clock.finish)
       @log.puts "\nBuilt #{@step_count + 2} commits in #{@out} (#{@steps.size} tests)"
-      @log.puts "Escalations: #{@escalations.map { |n, f, l| l == :class || l == :footprint ? "#{l} #{f[0, 50]} at step #{n}" : "#{f} to #{l} at step #{n}" }.join('; ')}" if @escalations.any?
+      @log.puts "Escalations: #{@escalations.map { |n, f, l| l == :class || l == :footprint || l == :unfold ? "#{l} #{f[0, 50]} at step #{n}" : "#{f} to #{l} at step #{n}" }.join('; ')}" if @escalations.any?
+      @log.puts "Deferred: #{@deferred.map(&:id).join(', ')}" if @deferred.any?
       @log.puts "#{@failures.size} step(s) still failing: #{@failures.map(&:first).join(', ')}" if @failures.any?
       @out
+    end
+
+    # The lines the current set of tests accounts for: test code for every
+    # included or folded test, library code only for tests whose footprint
+    # has been admitted (every step's own test; a folded test once the code
+    # grew past it).
+    def union_now
+      union = Hash.new { |h, k| h[k] = Set.new }
+      (@included + @folded.values).each do |t|
+        full = @full_ids.include?(t.id)
+        t.lines.each { |f, ls| union[f].merge(ls) if full || @project.test_file?(f) }
+      end
+      union
     end
 
     # Slice every file that should exist at this point. Iterates because what
@@ -360,36 +389,37 @@ module Hindsight
 
     # Try progressively more generous slicing until the step goes green.
     # Returns [ok, escalations_made, outputs].
-    def escalate(n, test, union)
+    def escalate(n, test, pending)
       made = []
       last_log = read_log(n)
       candidates = candidate_files(last_log, test)
+      green = lambda do |label|
+        outputs = slice_all(union_now)
+        sync(outputs)
+        verify(n, test, quiet: true, label: label) ? outputs : nil
+      end
+      succeed = lambda do |outputs|
+        @failures.reject! { |fn, _| fn == n }
+        [true, made, outputs]
+      end
 
       # Zeroth rung: a test folded into an earlier step now fails because the
       # code has grown around it. Give it the lines it recorded.
       broken = @last_failures.filter_map { |id| @folded[id] }
       if broken.any?
-        broken.each { |t| t.lines.each { |f, ls| union[f].merge(ls) }; @folded.delete(t.id) }
-        outputs = slice_all(union)
-        sync(outputs)
-        if verify(n, test, quiet: true, label: "folded")
+        broken.each { |t| @full_ids << t.id }
+        if (outputs = green.call("folded"))
           broken.each { |t| made << [t.description[0, 60], :footprint]; @escalations << [n, t.id, :footprint] }
-          @failures.reject! { |fn, _| fn == n }
-          return [true, made, outputs]
+          return succeed.call(outputs)
         end
       end
 
       # First rung: the recorded footprint may be missing lazily initialised
       # code another test paid for. Re-record this test alone and merge.
-      if isolate!(test, union)
-        outputs = slice_all(union)
-        sync(outputs)
-        if verify(n, test, quiet: true, label: "isolated")
-          made << ["#{test.file}:#{test.line}", :isolated]
-          @escalations << [n, test.id, :isolated]
-          @failures.reject! { |fn, _| fn == n }
-          return [true, made, outputs]
-        end
+      if isolate!(test) && (outputs = green.call("isolated"))
+        made << ["#{test.file}:#{test.line}", :isolated]
+        @escalations << [n, test.id, :isolated]
+        return succeed.call(outputs)
       end
 
       # One class at a time: something looked a class up by name
@@ -403,13 +433,10 @@ module Hindsight
           break if tried >= MAX_CLASS_ATTEMPTS
           tried += 1
           @forced << name
-          outputs = slice_all(union)
-          sync(outputs)
-          if verify(n, test, quiet: true, label: "class-#{name}")
+          if (outputs = green.call("class-#{name}"))
             made << [name, :class]
             @escalations << [n, name, :class]
-            @failures.reject! { |fn, _| fn == n }
-            return [true, made, outputs]
+            return succeed.call(outputs)
           end
           @forced.delete(name)
         end
@@ -422,41 +449,44 @@ module Hindsight
           next if LEVELS.index(level) <= LEVELS.index(@levels[f]) || !allowed_level?(f, level)
           saved = @levels[f]
           @levels[f] = level
-          outputs = slice_all(union)
-          sync(outputs)
-          if verify(n, test, quiet: true, label: "#{level}-#{f.tr('/', '_')}")
+          if (outputs = green.call("#{level}-#{f.tr('/', '_')}"))
             made << [f, level]
             @escalations << [n, f, level]
-            @failures.reject! { |fn, _| fn == n }
-            return [true, made, outputs]
+            return succeed.call(outputs)
           end
           @levels[f] = saved
         end
       end
 
-      # Everything the suite loaded, as structure, then in full.
-      LEVELS.drop(1).each do |level|
-        changed = @record.loaded_files.reject { |f| LEVELS.index(@levels[f]) >= LEVELS.index(level) }
-        next if changed.empty?
-        saved = changed.to_h { |f| [f, @levels[f]] }
-        changed.each { |f| @levels[f] = level }
-        outputs = slice_all(union)
-        sync(outputs)
-        if verify(n, test, quiet: true, label: "all-#{level}")
-          changed.each { |f| made << [f, level]; @escalations << [n, f, level] }
-          @failures.reject! { |fn, _| fn == n }
-          return [true, made, outputs]
+      # Un-fold: tests folded earlier that fail now go back to the queue to
+      # be tried at a step of their own.
+      broken = @last_failures.filter_map { |id| @folded[id] }
+      if broken.any?
+        broken.each { |t| @folded.delete(t.id); @full_ids.delete(t.id); pending << t }
+        if (outputs = green.call("unfolded"))
+          broken.each { |t| made << [t.description[0, 60], :unfold]; @escalations << [n, t.id, :unfold] }
+          return succeed.call(outputs)
         end
-        saved.each { |f, l| @levels[f] = l }
       end
 
-      outputs = slice_all(union)
+      # Everything the suite loaded, as structure.
+      changed = @record.loaded_files.select { |f| @levels[f] == :sliced }
+      if changed.any?
+        changed.each { |f| @levels[f] = :structure }
+        if (outputs = green.call("all-structure"))
+          changed.each { |f| made << [f, :structure]; @escalations << [n, f, :structure] }
+          return succeed.call(outputs)
+        end
+        changed.each { |f| @levels[f] = :sliced }
+      end
+
+      outputs = slice_all(union_now)
       sync(outputs)
       [false, made, outputs]
     end
 
-    # Returns true when isolation added lines to the union.
-    def isolate!(test, union)
+    # Returns true when isolation added lines to the test's footprint.
+    def isolate!(test)
       return false if @isolated&.include?(test.id)
       (@isolated ||= Set.new) << test.id
       Dir.mktmpdir("hindsight") do |tmp|
@@ -464,10 +494,9 @@ module Hindsight
         alone = rec.tests.find { |t| t.id == test.id } or return false
         added = false
         alone.lines.each do |f, ls|
-          fresh = ls - union[f]
+          fresh = ls - (test.lines[f] || Set.new)
           next if fresh.empty?
           added = true
-          union[f].merge(fresh)
           test.lines[f] = (test.lines[f] || Set.new) | fresh
         end
         added
@@ -639,6 +668,7 @@ module Hindsight
           lines << case level
                    when :class then "  needed class #{f}"
                    when :footprint then "  needed the code recorded for: #{f}"
+                   when :unfold then "  no longer passes, retried later: #{f}"
                    else "  needed #{f} as #{level}"
                    end
         end
