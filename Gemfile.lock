@@ -1,54 +1,32 @@
 GEM
   remote: https://rubygems.org/
   specs:
-    abstract_type (0.0.7)
-    adamantium (0.2.0)
-      ice_nine (~> 0.11.0)
-      memoizable (~> 0.4.0)
-    ast (2.3.0)
-    coderay (1.1.2)
-    color (1.8)
-    concord (0.1.5)
-      adamantium (~> 0.2.0)
-      equalizer (~> 0.0.9)
-    css_color (1.0.1)
-      color
-    diff-lcs (1.3)
-    equalizer (0.0.11)
-    ice_nine (0.11.2)
-    memoizable (0.4.2)
-      thread_safe (~> 0.3, >= 0.3.1)
-    method_source (0.8.2)
-    parser (2.4.0.0)
-      ast (~> 2.2)
-    power_assert (0.2.6)
-    procto (0.0.3)
-    pry (0.10.4)
-      coderay (~> 1.1.0)
-      method_source (~> 0.8.1)
-      slop (~> 3.4)
-    slop (3.6.0)
-    test-unit (3.1.5)
-      power_assert
-    thread_safe (0.3.6)
-    unparser (0.2.6)
-      abstract_type (~> 0.0.7)
-      adamantium (~> 0.2.0)
-      concord (~> 0.1.5)
-      diff-lcs (~> 1.3)
-      equalizer (~> 0.0.9)
-      parser (>= 2.3.1.2, < 2.5)
-      procto (~> 0.0.2)
+    ast (2.4.3)
+    drb (2.2.3)
+    minitest (6.0.6)
+      drb (~> 2.0)
+      prism (~> 1.5)
+    parser (3.3.12.0)
+      ast (~> 2.4.1)
+      racc
+    prism (1.9.0)
+    racc (1.8.1)
 
 PLATFORMS
+  arm64-darwin-25
   ruby
 
 DEPENDENCIES
-  css_color
+  minitest
   parser
-  pry
-  test-unit
-  unparser
+
+CHECKSUMS
+  ast (2.4.3) sha256=954615157c1d6a382bc27d690d973195e79db7f55e9765ac7c481c60bdb4d383
+  drb (2.2.3) sha256=0b00d6fdb50995fe4a45dea13663493c841112e4068656854646f418fda13373
+  minitest (6.0.6) sha256=153ea36d1d987a62942382b61075745042a2b3123b1cd48f4c3675af9cc7d6f1
+  parser (3.3.12.0) sha256=21a6d7f755d5a24dfbdc6e6b772e4e879a52e7631a88bc5a3a134606052c9828
+  prism (1.9.0) sha256=7b530c6a9f92c24300014919c9dcbc055bf4cdf51ec30aed099b06cd6674ef85
+  racc (1.8.1) sha256=4a7f6929691dbec8b5209a0b373bc2614882b55fc5d2e447a21aaa691303d62f
 
 BUNDLED WITH
-   1.15.4
+  4.0.20

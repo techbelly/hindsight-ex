@@ -1,0 +1,13 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+require "bundler/setup"
+require_relative "../lib/hindsight"
+require_relative "../lib/hindsight/cli"
+
+begin
+  Hindsight::CLI.start(ARGV)
+rescue Hindsight::Error => e
+  warn "hindsight: #{e.message}"
+  exit 1
+end
