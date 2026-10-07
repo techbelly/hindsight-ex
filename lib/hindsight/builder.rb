@@ -107,7 +107,8 @@ module Hindsight
           # A file stays if a test ran code in it, if it was forced, or if what
           # survived slicing still defines something.
           keep = union[f].any? || res.substantive || @project.test_file?(f) || @levels[f] != :sliced ||
-                 @structural_now.include?(f) || Slicer.defined_constants(text).any?
+                 @structural_now.include?(f) || Slicer.defined_constants(text).any? ||
+                 (Slicer.declared_constants(text) & refs).any? # an empty module someone mixes in
           next unless keep
           new_outputs[f] = text
         end
