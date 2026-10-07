@@ -639,4 +639,16 @@ class SlicerTest < Minitest::Test
     RUBY
     assert_includes out, "result = react env"
   end
+
+  def test_attributes_in_test_files_are_not_pruned
+    out = slice(<<~RUBY, used: [], path: "test/test_helper.rb")
+      class Sinatra::Base
+        attr_writer :assertions
+        def go     #L
+          1        #R
+        end
+      end
+    RUBY
+    assert_includes out, "attr_writer :assertions"
+  end
 end

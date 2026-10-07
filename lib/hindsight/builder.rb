@@ -337,7 +337,7 @@ module Hindsight
       @fold_skip ||= {}
       files = pending.map(&:file).uniq.reject { |f| (@fold_skip[f] || 0) > @step_now }
       results = parallel_map(files) do |f|
-        out, status, rec = run_with_probe(only_file: f, timeout: FOLD_TIMEOUT)
+        out, status, rec = run_with_probe(only_file: f, timeout: fold_timeout)
         if status.nil? && out.include?("timed out")
           @fold_backoff ||= Hash.new(1)
           @fold_skip[f] = @step_now + @fold_backoff[f]
@@ -356,6 +356,12 @@ module Hindsight
 
     FOLD_TIMEOUT = 15
     VERIFY_TIMEOUT = 120
+
+    # Fold runs get a budget scaled to how long the suite takes here: a big
+    # test file exercising error paths is slower than a hang is obvious.
+    def fold_timeout
+      [(@last_verify_seconds || 0) * 10, FOLD_TIMEOUT].max.clamp(FOLD_TIMEOUT, VERIFY_TIMEOUT)
+    end
 
     def parallel_map(items, workers: Etc.nprocessors)
       queue = Queue.new
@@ -490,7 +496,7 @@ module Hindsight
       return false if @isolated&.include?(test.id)
       (@isolated ||= Set.new) << test.id
       Dir.mktmpdir("hindsight") do |tmp|
-        rec = Recorder.record(@project, @test_command, out: File.join(tmp, "one.json"), only: test.id)
+        rec = Recorder.record(@project, @test_command, out: File.join(tmp, "one.json"), only: test.id).restrict_to(@project.files)
         alone = rec.tests.find { |t| t.id == test.id } or return false
         added = false
         alone.lines.each do |f, ls|
@@ -683,7 +689,9 @@ module Hindsight
     # Run the suite in the output tree. Green means every test passed. The
     # probe rides along so we know which tests failed, for the ladder.
     def verify(n, test, quiet: false, label: nil)
+      started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
       out, status, results = run_with_probe(lenient: false)
+      @last_verify_seconds = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started
       @last_failures = results ? results.tests.reject(&:passed).map(&:id) : []
       return true if status&.success?
       @failures << [n, test.id] unless quiet || @failures.any? { |fn, _| fn == n }

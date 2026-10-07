@@ -519,7 +519,7 @@ module Hindsight
     # Keep an attribute only if kept code calls it. An accessor used only one
     # way becomes a reader or a writer.
     def prune_attributes(s)
-      return true if @used_methods.nil?
+      return true if @used_methods.nil? || @project.test_file?(@path) # fixtures stay whole
       kind = s.children[1]
       names = s.children[2..].map { |a| a.children[0] }
       read = names.select { |n| @used_methods.include?(n) }
