@@ -37,6 +37,7 @@ module Hindsight
       @forced = Set.new # constants to treat as referenced from now on
       @folded = {}      # tests folded into earlier steps, by id
       @last_failures = []
+      @red = {}         # test id => true if the previous fold run saw it fail
       @sources = {}
       @written = Set.new
     end
@@ -55,6 +56,7 @@ module Hindsight
       until pending.empty?
         test = pending.shift
         n += 1
+        was_red = @red.key?(test.id) # seen failing on the previous tree
         test.lines.each { |f, ls| union[f].merge(ls) }
         outputs = slice_all(union)
         sync(outputs)
@@ -83,7 +85,7 @@ module Hindsight
         end
         sizes = outputs.transform_values { |t| t.lines.size }
         story = Narrator.describe(previous_outputs, outputs, @project)
-        commit(subject_for(test), step_body(n, test, sizes, previous_sizes, ok, escalated, folded, story), date: @clock.tick(sizes, previous_sizes))
+        commit(subject_for(test), step_body(n, test, sizes, previous_sizes, ok, escalated, folded, story, was_red), date: @clock.tick(sizes, previous_sizes))
         previous_sizes = sizes
         previous_outputs = outputs
         progress(n, pending.size, test, ok, escalated, folded)
@@ -279,6 +281,7 @@ module Hindsight
       _out, _status, results = run_with_probe
       return [] unless results
       passed = results.tests.select(&:passed).map(&:id).to_set
+      @red = results.tests.reject(&:passed).to_h { |t| [t.id, true] }
       pending.select { |t| passed.include?(t.id) }
     ensure
       sync(committed) if committed
@@ -534,7 +537,7 @@ module Hindsight
       end
     end
 
-    def step_body(n, test, sizes, previous, ok, escalated, folded = [], story = [])
+    def step_body(n, test, sizes, previous, ok, escalated, folded = [], story = [], was_red = false)
       deltas = sizes.map { |f, s| [f, s - (previous[f] || 0)] }.reject { |_, d| d.zero? }
       prod = deltas.reject { |f, _| @project.test_file?(f) }.sum(&:last)
       lines = []
@@ -551,7 +554,8 @@ module Hindsight
         deltas.sort.each { |f, d| lines << format("  %-40s %+d", f, d) }
       end
       unless ok.nil?
-        lines << "" << "Verification: #{ok ? 'green' : 'RED'}"
+        before = was_red ? "red before, " : ""
+        lines << "" << "Verification: #{before}#{ok ? 'green' : 'RED'}#{' after' unless before.empty?}"
         escalated.each do |f, level|
           lines << case level
                    when :class then "  needed class #{f}"
