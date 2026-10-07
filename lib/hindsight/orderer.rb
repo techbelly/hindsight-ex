@@ -13,9 +13,18 @@ module Hindsight
 
     CANDIDATES_TO_KEEP = 6
 
-    def initialize(record, project)
+    # Affinity: how many extra lines a test elsewhere must save before the
+    # story leaves the current test file, or wanders into production files
+    # the last few steps did not touch.
+    FILE_SWITCH_COST = 4
+    NEW_PRODUCTION_FILE_COST = 3
+    RECENT = 3
+
+    def initialize(record, project, file_switch_cost: FILE_SWITCH_COST, new_file_cost: NEW_PRODUCTION_FILE_COST)
       @record = record
       @project = project
+      @file_switch_cost = file_switch_cost
+      @new_file_cost = new_file_cost
     end
 
     def order
@@ -27,11 +36,13 @@ module Hindsight
       covered = Set.new
       remaining = @record.tests.dup
       previous = nil
+      recent_files = []
       steps = []
 
       until remaining.empty?
-        best = remaining.min_by { |t| [gain[t], *locality(t, previous), t.file, t.line] }
-        ranked = remaining.sort_by { |t| [gain[t], t.file, t.line] }.first(CANDIDATES_TO_KEEP)
+        cost = remaining.to_h { |t| [t, gain[t] + affinity_penalty(t, previous, recent_files)] }
+        best = remaining.min_by { |t| [cost[t], *locality(t, previous), t.file, t.line] }
+        ranked = remaining.sort_by { |t| [cost[t], t.file, t.line] }.first(CANDIDATES_TO_KEEP)
         steps << Step.new(id: best.id, gain: gain[best], candidates: ranked.map { |t| [t.id, gain[t]] })
 
         fresh = sets[best] - covered
@@ -39,8 +50,17 @@ module Hindsight
         remaining.delete(best)
         remaining.each { |t| gain[t] -= fresh.count { |l| sets[t].include?(l) } }
         previous = best
+        recent_files = (recent_files + best.production_lines(@project).keys).last(RECENT * 4).uniq
       end
       steps
+    end
+
+    def affinity_penalty(test, previous, recent_files)
+      penalty = 0
+      penalty += @file_switch_cost if previous && previous.file != test.file
+      new_files = test.production_lines(@project).keys - recent_files
+      penalty += @new_file_cost * new_files.size
+      penalty
     end
 
     def self.save(steps, path)
