@@ -92,6 +92,8 @@ module Hindsight
 
       write_everything
       commit("Everything else", "Code no test reached, and files the test suite never loaded.", date: @clock.finish)
+      File.write(File.join(@out, "HINDSIGHT.md"), Story.new(@project, @out, @record).render)
+      commit("Explain where this history came from", "Provenance and a table of contents, generated.", date: @clock.finish)
       @log.puts "\nBuilt #{@step_count + 2} commits in #{@out} (#{@steps.size} tests)"
       @log.puts "Escalations: #{@escalations.map { |n, f, l| l == :class || l == :footprint ? "#{l} #{f[0, 50]} at step #{n}" : "#{f} to #{l} at step #{n}" }.join('; ')}" if @escalations.any?
       @log.puts "#{@failures.size} step(s) still failing: #{@failures.map(&:first).join(', ')}" if @failures.any?
