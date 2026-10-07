@@ -104,10 +104,33 @@ module Hindsight
 
     # Run a command inside the project with none of our own Bundler
     # environment leaking into it. Returns [output, status].
-    def self.run_in(dir, command, env: {}, rubyopt: nil)
+    # A sliced tree can loop forever (a loop whose body was cut away), so
+    # every run has a timeout; on expiry the whole process group is killed
+    # and the status is nil.
+    def self.run_in(dir, command, env: {}, rubyopt: nil, timeout: 120)
       runner = lambda do
         env = env.merge("RUBYOPT" => "#{rubyopt} #{ENV['RUBYOPT']}".strip) if rubyopt
-        Open3.capture2e(env, command, chdir: dir)
+        reader, writer = IO.pipe
+        pid = Process.spawn(env, command, chdir: dir, pgroup: true, out: writer, err: writer)
+        writer.close
+        output = +""
+        collector = Thread.new { output << reader.read }
+        deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + timeout
+        status = nil
+        loop do
+          _, status = Process.wait2(pid, Process::WNOHANG)
+          break if status
+          if Process.clock_gettime(Process::CLOCK_MONOTONIC) > deadline
+            Process.kill("KILL", -pid) rescue nil
+            Process.wait2(pid) rescue nil
+            output << "\nhindsight: timed out after #{timeout}s\n"
+            break
+          end
+          sleep 0.05
+        end
+        collector.join
+        reader.close
+        [output, status]
       end
       defined?(Bundler) ? Bundler.with_unbundled_env(&runner) : runner.call
     end

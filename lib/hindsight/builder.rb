@@ -5,6 +5,7 @@ require "open3"
 require "json"
 require "set"
 require "tmpdir"
+require "etc"
 
 module Hindsight
   # Replays the plan into a fresh git repository, one commit per test.
@@ -289,23 +290,44 @@ module Hindsight
       committed = slice_all(union)
       tree = committed.merge(trial_outputs.select { |f, _| @project.test_file?(f) })
       sync(tree)
-      _out, _status, results = run_with_probe
-      return [] unless results
-      passed = results.tests.select(&:passed).map(&:id).to_set
-      @red = results.tests.reject(&:passed).to_h { |t| [t.id, true] }
+      # One run per test file, in parallel, each with a short timeout: a
+      # pending test that loops forever in this tree must not stall the step.
+      files = pending.map(&:file).uniq
+      results = parallel_map(files) { |f| run_with_probe(only_file: f, timeout: FOLD_TIMEOUT)[2] }.compact
+      tests = results.flat_map(&:tests)
+      passed = tests.select(&:passed).map(&:id).to_set
+      @red = tests.reject(&:passed).to_h { |t| [t.id, true] }
       pending.select { |t| passed.include?(t.id) }
     ensure
       sync(committed) if committed
     end
 
+    FOLD_TIMEOUT = 30
+    VERIFY_TIMEOUT = 120
+
+    def parallel_map(items, workers: Etc.nprocessors)
+      queue = Queue.new
+      items.each_with_index { |x, i| queue << [x, i] }
+      out = Array.new(items.size)
+      Array.new([workers, items.size].min) do
+        Thread.new do
+          while (job = (queue.pop(true) rescue nil))
+            out[job[1]] = yield(job[0])
+          end
+        end
+      end.each(&:join)
+      out
+    end
+
     # Run the suite in the output directory under the probe.
     # Returns [output, status, record_or_nil].
-    def run_with_probe(lenient: true)
+    def run_with_probe(lenient: true, only_file: nil, timeout: VERIFY_TIMEOUT)
       Dir.mktmpdir("hindsight") do |tmp|
         out = File.join(tmp, "run.json")
         env = { "HINDSIGHT_ROOT" => @out, "HINDSIGHT_OUT" => out }
         env["HINDSIGHT_LENIENT"] = "1" if lenient
-        output, status = Project.run_in(@out, @test_command, env: env, rubyopt: "-I#{Recorder::LIB} -rhindsight/probe")
+        env["HINDSIGHT_ONLY_FILE"] = only_file if only_file
+        output, status = Project.run_in(@out, @test_command, env: env, rubyopt: "-I#{Recorder::LIB} -rhindsight/probe", timeout: timeout)
         record = File.exist?(out) ? (Record.load(out) rescue nil) : nil
         [output, status, record]
       end

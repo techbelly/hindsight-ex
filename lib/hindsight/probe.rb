@@ -43,9 +43,14 @@ module Hindsight
 
     ROOT = File.expand_path(ENV.fetch("HINDSIGHT_ROOT", Dir.pwd)) + "/"
     OUT  = ENV.fetch("HINDSIGHT_OUT", "hindsight-coverage.json")
-    ONLY = ENV["HINDSIGHT_ONLY"] # run just this test id, skipping the rest
+    ONLY = ENV["HINDSIGHT_ONLY"]           # run just this test id
+    ONLY_FILE = ENV["HINDSIGHT_ONLY_FILE"] # run just the tests defined in this file (relative to ROOT)
 
-    def self.selected?(id) = ONLY.nil? || ONLY == id
+    def self.selected?(id, file = nil)
+      return false if ONLY && ONLY != id
+      return false if ONLY_FILE && file && relative(file) != ONLY_FILE
+      true
+    end
 
     @tests = []
     @baseline = nil
@@ -91,11 +96,11 @@ module Hindsight
         File.write(OUT, JSON.generate(data))
       end
 
-      private
-
       def relative(path)
         path.start_with?(ROOT) ? path.delete_prefix(ROOT) : path
       end
+
+      private
 
       # Keep only project files and only lines/branches that executed.
       # lines:    { "12" => count, ... }
@@ -170,7 +175,7 @@ module Hindsight
     module MinitestHook
       def run
         id = "#{self.class.name}##{name}"
-        unless Hindsight::Probe.selected?(id)
+        unless Hindsight::Probe.selected?(id, method(name).source_location&.first)
           failures << Minitest::Skip.new("not selected by hindsight")
           return Minitest::Result.from(self)
         end
@@ -200,7 +205,7 @@ module Hindsight
       require "rspec/core"
       RSpec.configure do |config|
         config.around(:each) do |example|
-          next example.skip("not selected by hindsight") unless Hindsight::Probe.selected?(example.id)
+          next example.skip("not selected by hindsight") unless Hindsight::Probe.selected?(example.id, example.metadata[:absolute_file_path])
           Hindsight::Probe.before_test
           example.run
           Hindsight::Probe.after_test(
