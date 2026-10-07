@@ -425,4 +425,19 @@ class SlicerTest < Minitest::Test
     refute_includes out, "DEFAULT"
     assert_includes slice(src), "attr_reader :flags, :desc" # no usage info: keep all
   end
+
+  def test_constant_visibility_follows_the_constants
+    out = slice(<<~RUBY, referenced: [:KEEP])
+      class F
+        KEEP = 1
+        GONE = 2
+        private_constant :KEEP, :GONE
+        def go     #L
+          1        #R
+        end
+      end
+    RUBY
+    assert_includes out, "private_constant :KEEP\n"
+    refute_includes out, "GONE"
+  end
 end

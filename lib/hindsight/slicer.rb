@@ -286,14 +286,34 @@ module Hindsight
 
     # `BooleanOption = BoolOption` is structure, but when BoolOption was
     # dropped from this body the alias has nothing to point at.
+    CONSTANT_REFERENCING = %i[private_constant public_constant deprecate_constant].freeze
+
     def prune_constant_aliases(kept)
-      dropped = kept.filter_map { |s, keep| s.children[0].children[1] if !keep && node?(s) && %i[class module].include?(s.type) }.to_set
+      dropped = kept.filter_map do |s, keep|
+        next if keep || !node?(s)
+        case s.type
+        when :class, :module then s.children[0].children[1]
+        when :casgn then s.children[1]
+        end
+      end.to_set
       return if dropped.empty?
       kept.each do |entry|
         s, keep = entry
-        next unless keep && node?(s) && s.type == :casgn
-        rhs = s.children[2]
-        entry[1] = false if node?(rhs) && rhs.type == :const && rhs.children[0].nil? && dropped.include?(rhs.children[1])
+        next unless keep && node?(s)
+        if s.type == :casgn
+          rhs = s.children[2]
+          entry[1] = false if node?(rhs) && rhs.type == :const && rhs.children[0].nil? && dropped.include?(rhs.children[1])
+        elsif s.type == :send && s.children[0].nil? && CONSTANT_REFERENCING.include?(s.children[1])
+          args = s.children[2..]
+          next unless args.any? && args.all? { |a| node?(a) && a.type == :sym }
+          keep_args = args.reject { |a| dropped.include?(a.children[0]) }
+          if keep_args.empty?
+            entry[1] = false
+          elsif keep_args.size < args.size && !multiline?(s)
+            from, to = args.first.loc.expression, args.last.loc.expression
+            @editor.replace(from.line, from.column, to.end.column, keep_args.map { |a| a.loc.expression.source }.join(", "))
+          end
+        end
       end
     end
 
