@@ -419,6 +419,7 @@ module Hindsight
       made = []
       last_log = read_log(n)
       candidates = candidate_files(last_log, test)
+      initial_failures = @last_failures.dup
       green = lambda do |label|
         outputs = slice_all(union_now)
         sync(outputs)
@@ -446,6 +447,24 @@ module Hindsight
         made << ["#{test.file}:#{test.line}", :isolated]
         @escalations << [n, test.id, :isolated]
         return succeed.call(outputs)
+      end
+
+      # Un-fold: tests folded earlier that fail now go back to the queue to
+      # be tried at a step of their own.
+      broken = initial_failures.filter_map { |id| @folded[id] }
+      if broken.any?
+        broken.each { |t| @folded.delete(t.id); @full_ids.delete(t.id); pending << t }
+        if (outputs = green.call("unfolded"))
+          broken.each { |t| made << [t.description[0, 60], :unfold]; @escalations << [n, t.id, :unfold] }
+          return succeed.call(outputs)
+        end
+      end
+
+      # The step's own test passes but others in the history now fail: its
+      # code interferes with theirs. Retry it later rather than regress.
+      others = initial_failures.reject { |id| id == test.id }
+      if others.any? && !initial_failures.include?(test.id) && (@retries[test.id] += 1) <= MAX_RETRIES
+        return [:retry, made, nil]
       end
 
       # One class at a time: something looked a class up by name
@@ -482,24 +501,6 @@ module Hindsight
           end
           @levels[f] = saved
         end
-      end
-
-      # Un-fold: tests folded earlier that fail now go back to the queue to
-      # be tried at a step of their own.
-      broken = @last_failures.filter_map { |id| @folded[id] }
-      if broken.any?
-        broken.each { |t| @folded.delete(t.id); @full_ids.delete(t.id); pending << t }
-        if (outputs = green.call("unfolded"))
-          broken.each { |t| made << [t.description[0, 60], :unfold]; @escalations << [n, t.id, :unfold] }
-          return succeed.call(outputs)
-        end
-      end
-
-      # The step's own test passes but others in the history now fail: its
-      # code interferes with theirs. Retry it later rather than regress.
-      others = @last_failures.reject { |id| id == test.id }
-      if others.any? && !@last_failures.include?(test.id) && (@retries[test.id] += 1) <= MAX_RETRIES
-        return [:retry, made, nil]
       end
 
       # Everything the suite loaded, as structure.
