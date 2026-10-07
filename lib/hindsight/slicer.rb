@@ -380,7 +380,14 @@ module Hindsight
     # `alias get []` or `private :foo` are structure, but they name methods.
     # When the method they name has been dropped they must go too, or be
     # trimmed to the names that remain. +drop+ is called for each to remove.
+    # Methods every object, class or module has anyway. Dropping a project's
+    # redefinition of one of these leaves the original, so an alias to it
+    # still works.
+    CORE_METHODS = (Object.instance_methods | Object.private_instance_methods |
+                    Class.instance_methods | Module.instance_methods | Module.private_instance_methods).to_set.freeze
+
     def prune_method_references(kept, dropped, &drop)
+      dropped = dropped.reject { |_, name| CORE_METHODS.include?(name) }.to_set
       return if dropped.empty?
       kept.each do |stmt, keep|
         next unless keep && method_reference?(stmt)

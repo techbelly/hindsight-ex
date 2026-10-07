@@ -547,4 +547,22 @@ class SlicerTest < Minitest::Test
     assert_includes out, "define_method(:wanted)"
     refute_includes out, "unused"
   end
+
+  def test_aliases_to_core_methods_survive_a_dropped_redefinition
+    out = slice(<<~RUBY)
+      class Base
+        class << self
+          alias new! new unless method_defined? :new!
+          def new(*args, &block)
+            build(*args, &block).to_app
+          end
+          def go       #L
+            1          #R
+          end
+        end
+      end
+    RUBY
+    assert_includes out, "alias new! new"
+    refute_includes out, "def new("
+  end
 end
