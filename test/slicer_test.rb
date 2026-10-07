@@ -600,4 +600,30 @@ class SlicerTest < Minitest::Test
     refute_includes out, "private_constant"
     assert_includes out, 'DOT = "."'
   end
+
+  def test_symbols_naming_a_defined_method_count_as_references
+    src = <<~RUBY
+      class Base
+        def self.default_reaction(reaction)   #L
+          alias_method(:default_reaction, reaction)   #L
+        end
+        def deny(env)
+          [403, {}, []]
+        end
+        def report(env)
+          nil
+        end
+        default_reaction :deny    #L
+        def go     #L
+          1        #R
+        end
+      end
+    RUBY
+    refs = Hindsight::Slicer.referenced_methods(src)
+    assert_includes refs, :deny
+    refute_includes refs, :report
+    out = slice(src, methods: refs.to_a)
+    assert_includes out, "def deny"
+    refute_includes out, "def report"
+  end
 end

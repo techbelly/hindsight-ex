@@ -59,18 +59,18 @@ module Hindsight
         n += 1
         was_red = @red.key?(test.id) # seen failing on the previous tree
         test.lines.each { |f, ls| union[f].merge(ls) }
-        outputs = slice_all(union)
+        outputs = timed("slice") { slice_all(union) }
         sync(outputs)
         ok = nil
         escalated = []
         folded = []
         if @verify
-          ok = verify(n, test)
+          ok = timed("verify") { verify(n, test) }
           unless ok
-            ok, escalated, outputs = escalate(n, test, union)
+            ok, escalated, outputs = timed("escalate") { escalate(n, test, union) }
           end
           if ok && pending.any?
-            folded = fold_passing(union, pending)
+            folded = timed("fold") { fold_passing(union, pending) }
             unless folded.empty?
               pending -= folded
               # Only their test code joins now. If a later step routes one of
@@ -239,6 +239,15 @@ module Hindsight
     end
 
     def source(f) = @sources[f] ||= @project.read(f)
+
+    # HINDSIGHT_TRACE=1 prints how long each phase of a step takes.
+    def timed(label)
+      return yield unless ENV["HINDSIGHT_TRACE"]
+      t = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      result = yield
+      @log.puts format("    %-14s %6.2fs", label, Process.clock_gettime(Process::CLOCK_MONOTONIC) - t)
+      result
+    end
 
     # Every method name defined anywhere in the project's own Ruby.
     def project_defined_methods

@@ -219,13 +219,21 @@ module Hindsight
     end
 
     # Method names this source looks up by symbol: `method(:partial)`,
-    # `respond_to?(:each)`, `send(:parse)`. Coverage can't see these.
+    # `respond_to?(:each)`, `send(:parse)`. Coverage can't see these. Also
+    # any symbol passed to a call that happens to name a method this source
+    # defines (`default_reaction :deny`, `before_action :check`): class-level
+    # DSL that will reach for the method by name.
     def self.referenced_methods(source)
       names = Set.new
+      defined = defined_methods(source)
       walk(parse(source)) do |n|
-        next unless n.type == :send && REFLECTION.include?(n.children[1])
-        arg = n.children[2]
-        names << arg.children[0] if arg.is_a?(Parser::AST::Node) && arg.type == :sym
+        next unless n.type == :send
+        syms = n.children[2..].select { |a| a.is_a?(Parser::AST::Node) && a.type == :sym }.map { |a| a.children[0] }
+        if REFLECTION.include?(n.children[1])
+          names << syms.first if syms.first
+        elsif !ATTRS.include?(n.children[1]) && !METHOD_REFERENCING.include?(n.children[1])
+          names.merge(syms & defined.to_a)
+        end
       end
       names
     end
