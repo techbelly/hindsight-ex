@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "tmpdir"
+require "etc"
 
 module Hindsight
   # Runs the target's test suite with the probe loaded and returns the Record.
@@ -17,18 +18,47 @@ module Hindsight
       Record.load(out)
     end
 
-    # Record every test in its own process, so each footprint includes any
-    # lazy initialisation it relies on. Slower, but exact.
-    def self.record_isolated(project, test_command, out:, log: nil)
+    # Record every test in its own process, so each footprint is exactly what
+    # that test needs, including any lazy initialisation another test would
+    # otherwise have paid for. One whole-suite run first supplies the
+    # load-time baseline and the require graph. Runs are independent, so they
+    # go in parallel.
+    def self.record_isolated(project, test_command, out:, log: nil, workers: Etc.nprocessors)
       Dir.mktmpdir("hindsight") do |tmp|
-        whole = record(project, test_command, out: File.join(tmp, "all.json"))
-        tests = whole.tests.each_with_index.map do |t, i|
-          log&.print("\r  isolating #{i + 1}/#{whole.tests.size}")
-          rec = record(project, test_command, out: File.join(tmp, "one.json"), only: t.id)
-          rec.tests.find { |x| x.id == t.id } || t
+        whole = record(project, test_command, out: File.join(tmp, "all.json"), log: log)
+        queue = Queue.new
+        whole.tests.each_with_index { |t, i| queue << [t, i] }
+        results = Array.new(whole.tests.size)
+        done = 0
+        mutex = Mutex.new
+        not_alone = []
+        threads = Array.new([workers, whole.tests.size].min) do
+          Thread.new do
+            while (job = (queue.pop(true) rescue nil))
+              t, i = job
+              one = begin
+                record(project, test_command, out: File.join(tmp, "one-#{i}.json"), only: t.id)
+                      .tests.find { |x| x.id == t.id }
+              rescue Error
+                nil
+              end
+              mutex.synchronize do
+                if one&.passed
+                  results[i] = one
+                else
+                  results[i] = t # keep the whole-run footprint for a test that can't run alone
+                  not_alone << t.id
+                end
+                done += 1
+                log&.print("\r  isolating #{done}/#{whole.tests.size}")
+              end
+            end
+          end
         end
+        threads.each(&:join)
         log&.puts
-        whole.replace_tests(tests)
+        log&.puts("  #{not_alone.size} test(s) do not pass alone; used their whole-run footprint: #{not_alone.first(5).join(', ')}#{'...' if not_alone.size > 5}") if not_alone.any?
+        whole.replace_tests(results)
         whole.save(out)
         whole
       end

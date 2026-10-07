@@ -28,7 +28,7 @@ module Hindsight
         o.on("--out DIR", "where to build the repository (default: <work>/repo)") { |v| opts[:out] = v }
         o.on("--verify", "run the tests at every commit") { opts[:verify] = true }
         o.on("--limit N", Integer, "only build the first N steps") { |v| opts[:limit] = v }
-        o.on("--isolated", "record each test in its own process (slow, exact)") { opts[:isolated] = true }
+        o.on("--fast", "record the whole suite in one process instead of one per test") { opts[:fast] = true }
       end
       rest = parser.parse(argv)
       command, target = rest
@@ -60,11 +60,11 @@ module Hindsight
     private
 
     def record(project, paths, test_cmd, opts)
-      $stderr.puts "Recording: #{test_cmd}#{' (isolated)' if opts[:isolated]}"
-      rec = if opts[:isolated]
-        Recorder.record_isolated(project, test_cmd, out: paths[:coverage], log: $stderr)
-      else
+      $stderr.puts "Recording: #{test_cmd}#{opts[:fast] ? ' (one process)' : ' (one process per test)'}"
+      rec = if opts[:fast]
         Recorder.record(project, test_cmd, out: paths[:coverage], log: $stderr)
+      else
+        Recorder.record_isolated(project, test_cmd, out: paths[:coverage], log: $stderr)
       end
       $stderr.puts "Recorded #{rec.tests.size} tests over #{rec.runtime_files.size} files -> #{paths[:coverage]}"
     end

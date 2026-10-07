@@ -14,10 +14,11 @@ when they pass.
 
 Four stages, each leaving a file in `work/<project>/`:
 
-1. **record** runs the suite once with a probe loaded via `RUBYOPT`. The probe
-   snapshots Ruby's `Coverage` after every test, so each test gets its own
-   runtime footprint, separate from the code that merely ran while files were
-   loading. It also records which file required which.
+1. **record** runs the suite with a probe loaded via `RUBYOPT`. One whole run
+   gives the load-time baseline and the require graph; then every test runs
+   in its own process, in parallel, so its footprint is exactly the lines it
+   needs, lazy initialisation included. (`--fast` records the whole suite in
+   one process instead, attributing shared setup to whichever test ran first.)
    Output: `coverage.json`.
 2. **order** picks the sequence greedily: at each step the test that needs the
    fewest new production lines goes next, the TDD instinct of taking the
@@ -32,10 +33,9 @@ Four stages, each leaving a file in `work/<project>/`:
    Output: `repo/`.
 4. **verify** (optional, `--verify`) runs the suite at every step. When it
    fails, the builder escalates one rung at a time until it is green again:
-   re-record that single test in isolation to pick up lazily initialised code
-   another test paid for; keep one file's classes as bare structure; keep one
-   file whole. Each escalation is noted in the commit message and sticks for
-   later steps.
+   re-record that single test in isolation (only useful after `--fast`); keep
+   one file's classes as bare structure; keep one file whole. Each escalation
+   is noted in the commit message and sticks for later steps.
 
 The first commit holds the non-Ruby scaffolding (gemspec, README, licence).
 The last commit adds whatever no test ever reached.
@@ -50,8 +50,7 @@ bin/hindsight build  targets/liquid --verify --limit 50
 ```
 
 Options: `--test-cmd` (defaults to a minitest glob or `bundle exec rspec`),
-`--work DIR`, `--out DIR`, `--limit N`, `--isolated` (record every test in its
-own process; slow but exact). `bin/hindsight-debug TARGET N` builds up to step
+`--work DIR`, `--out DIR`, `--limit N`, `--fast` (one recording process). `bin/hindsight-debug TARGET N` builds up to step
 N and runs the tests there, for poking at a failure.
 
 Requires Ruby 3.3 or later and the `parser` gem (`bundle install`). The target
@@ -80,9 +79,9 @@ over the finished history.
   `method(:x)`, `send(:x)` are invisible, which is what the escalation ladder
   is for. Symbols passed to reflection calls in kept code are treated as
   references, which catches most of it.
-- Code that runs once and is memoised is attributed to whichever test ran
-  first. Isolation re-recording fixes this where it bites; `--isolated` fixes
-  it everywhere at the cost of one process per test.
+- Comments are stripped from generated code. A synthetic history has no
+  author whose remarks they would be, and comments about code that is not
+  there yet mislead. Magic comments stay.
 - Only whole lines are ever removed, so one-line constructs are kept or
   dropped as a unit.
 
