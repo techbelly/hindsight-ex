@@ -114,6 +114,13 @@ module Hindsight
       stmts.all? { |c| c.is_a?(Parser::AST::Node) && %i[class module casgn].include?(c.type) }
     end
 
+    # Every class and module name this source declares, wrappers included.
+    def self.declared_constants(source)
+      names = Set.new
+      walk(parse(source)) { |n| names << n.children[0].children[1] if %i[class module].include?(n.type) }
+      names
+    end
+
     # Is this sliced output nothing but empty wrappers and requires? Such a
     # file exists only to satisfy a require and says nothing yet.
     def self.hollow?(source)

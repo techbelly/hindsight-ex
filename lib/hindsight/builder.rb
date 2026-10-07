@@ -102,16 +102,15 @@ module Hindsight
           res = Slicer.new(@project, f, source(f), runtime_lines: union[f], present_files: exists,
                            referenced: refs, referenced_methods: methods, whole_classes: whole,
                            load_lines: @record.baseline[f] || Set.new).slice
-          keep = union[f].any? || res.substantive || @project.test_file?(f) || @levels[f] != :sliced ||
-                 @structural_now.include?(f) ||
-                 (Slicer.parseable?(source(f)) && (Slicer.defined_constants(source(f)) & referenced).any?)
-          next unless keep
           text = Comments.strip(res.text)
-          # An empty `module Slop; end` exists only to satisfy a require. Leave
-          # it out; the next pass drops the require too.
-          next if !@project.test_file?(f) && Slicer.hollow?(text) && @levels[f] == :sliced
+          # A file stays if a test ran code in it, if it was forced, or if what
+          # survived slicing still defines something.
+          keep = union[f].any? || res.substantive || @project.test_file?(f) || @levels[f] != :sliced ||
+                 @structural_now.include?(f) || Slicer.defined_constants(text).any?
+          next unless keep
           new_outputs[f] = text
         end
+        drop_hollow(new_outputs)
         refs = new_outputs.values.map { |t| Slicer.referenced_constants(t) }.reduce(Set.new, :|)
         meths = new_outputs.values.map { |t| Slicer.referenced_methods(t) }.reduce(Set.new, :|)
         wholes = new_outputs.values.map { |t| Slicer.whole_classes(t) }.reduce(Set.new, :|)
@@ -127,6 +126,18 @@ module Hindsight
     end
 
     private
+
+    # An output that is nothing but `module Slop; end` exists only to satisfy
+    # a require. Leave it out when every constant it declares is defined with
+    # content elsewhere; the next pass drops the require too. An empty module
+    # nothing else defines (a mixin with no methods yet) stays.
+    def drop_hollow(outputs)
+      defined = outputs.values.map { |t| Slicer.defined_constants(t) }.reduce(Set.new, :|)
+      outputs.delete_if do |f, text|
+        next false if @project.test_file?(f) || @levels[f] != :sliced
+        Slicer.hollow?(text) && Slicer.declared_constants(text).subset?(defined - Slicer.defined_constants(text))
+      end
+    end
 
     # Which Ruby files exist at this step, before slicing.
     def present_files(union, referenced)
