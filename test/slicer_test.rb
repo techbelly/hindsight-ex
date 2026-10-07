@@ -369,4 +369,39 @@ class SlicerTest < Minitest::Test
       end
     RUBY
   end
+
+  def test_namespace_wrappers_do_not_count_as_definitions
+    defs = Hindsight::Slicer.defined_constants(<<~RUBY)
+      module Slop
+        class Error < StandardError; end
+        module Util
+          class Thing
+            def go; end
+          end
+        end
+        VERSION = "1"
+      end
+    RUBY
+    assert_equal Set[:Error, :Thing, :VERSION], defs
+    assert Hindsight::Slicer.hollow?("require 'x'\nmodule Slop\nend\n")
+    refute Hindsight::Slicer.hollow?("module Slop\n  class E < StandardError; end\nend\n")
+  end
+
+  def test_constant_aliases_follow_their_classes
+    out = slice(<<~RUBY)
+      module Slop
+        class BoolOption < Option
+          def call; end
+        end
+        BooleanOption = BoolOption
+        class Used < Option
+          def go       #L
+            1          #R
+          end
+        end
+      end
+    RUBY
+    refute_includes out, "BooleanOption"
+    assert_includes out, "class Used"
+  end
 end

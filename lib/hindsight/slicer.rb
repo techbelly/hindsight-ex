@@ -92,16 +92,41 @@ module Hindsight
       Result.new(text: @editor.result, substantive: substantive)
     end
 
-    # Constant names defined at any level of this file.
+    # Constant names this file defines. A module or class whose body holds
+    # nothing but other definitions is a namespace being reopened
+    # (`module Slop` at the top of every file), not a definition.
     def self.defined_constants(source)
       names = Set.new
       walk(parse(source)) do |n|
         case n.type
-        when :class, :module then names << n.children[0].children[1]
+        when :class, :module
+          names << n.children[0].children[1] unless namespace_wrapper?(n)
         when :casgn then names << n.children[1]
         end
       end
       names
+    end
+
+    def self.namespace_wrapper?(n)
+      body = n.children.last
+      return false if n.type == :class && n.children[1] # has a superclass: it defines something
+      stmts = body.nil? ? [] : (body.type == :begin ? body.children : [body])
+      stmts.all? { |c| c.is_a?(Parser::AST::Node) && %i[class module casgn].include?(c.type) }
+    end
+
+    # Is this sliced output nothing but empty wrappers and requires? Such a
+    # file exists only to satisfy a require and says nothing yet.
+    def self.hollow?(source)
+      walk(parse(source)) do |n|
+        case n.type
+        when :begin, :const, :cbase, :str, :nil then next
+        when :module then next if n.children.last.nil?
+        when :class then next if n.children.last.nil? && n.children[1].nil?
+        when :send then next if n.children[0].nil? && %i[require require_relative].include?(n.children[1])
+        end
+        return false
+      end
+      true
     end
 
     # Constant names referenced in this source.
@@ -221,6 +246,7 @@ module Hindsight
         dropped = kept.filter_map { |s, keep| def_key(s) unless keep }.to_set
         @dropped_defs.merge(dropped)
         prune_method_references(kept, dropped) { |st| kept.find { |e| e[0].equal?(st) }[1] = false }
+        prune_constant_aliases(kept)
       end
       result = false
       kept.each_with_index do |(s, keep), i|
@@ -242,6 +268,19 @@ module Hindsight
 
     METHOD_REFERENCING = %i[alias_method private protected public module_function
                             private_class_method public_class_method].freeze
+
+    # `BooleanOption = BoolOption` is structure, but when BoolOption was
+    # dropped from this body the alias has nothing to point at.
+    def prune_constant_aliases(kept)
+      dropped = kept.filter_map { |s, keep| s.children[0].children[1] if !keep && node?(s) && %i[class module].include?(s.type) }.to_set
+      return if dropped.empty?
+      kept.each do |entry|
+        s, keep = entry
+        next unless keep && node?(s) && s.type == :casgn
+        rhs = s.children[2]
+        entry[1] = false if node?(rhs) && rhs.type == :const && rhs.children[0].nil? && dropped.include?(rhs.children[1])
+      end
+    end
 
     def method_reference?(s)
       node?(s) && (s.type == :alias ||
@@ -389,9 +428,9 @@ module Hindsight
         process_body(body, :load) if body && multiline?(d)
         return :substantive
       end
+      return true if body.nil? # an empty method is structure, not a reason to keep its class
       needed =
-        if body.nil? then true # an empty method is structure
-        elsif multiline?(d) then runtime?(body) || loaded?(body)
+        if multiline?(d) then runtime?(body) || loaded?(body)
         else @runtime.include?(first_line(d))
         end
       return false unless needed

@@ -105,7 +105,12 @@ module Hindsight
           keep = union[f].any? || res.substantive || @project.test_file?(f) || @levels[f] != :sliced ||
                  @structural_now.include?(f) ||
                  (Slicer.parseable?(source(f)) && (Slicer.defined_constants(source(f)) & referenced).any?)
-          new_outputs[f] = Comments.strip(res.text) if keep
+          next unless keep
+          text = Comments.strip(res.text)
+          # An empty `module Slop; end` exists only to satisfy a require. Leave
+          # it out; the next pass drops the require too.
+          next if !@project.test_file?(f) && Slicer.hollow?(text) && @levels[f] == :sliced
+          new_outputs[f] = text
         end
         refs = new_outputs.values.map { |t| Slicer.referenced_constants(t) }.reduce(Set.new, :|)
         meths = new_outputs.values.map { |t| Slicer.referenced_methods(t) }.reduce(Set.new, :|)
