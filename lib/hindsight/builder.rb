@@ -134,7 +134,8 @@ module Hindsight
           res = Slicer.new(@project, f, source(f), runtime_lines: union[f], present_files: exists,
                            referenced: refs, referenced_methods: methods, whole_classes: whole,
                            used_methods: refs.equal?(EVERYTHING) ? nil : used, missing_methods: missing,
-                           load_lines: @record.baseline[f] || Set.new).slice
+                           load_lines: @record.baseline[f] || Set.new,
+                           load_counts: @record.baseline_counts[f] || {}).slice
           text = Comments.strip(res.text)
           # A file stays if a test ran code in it, if it was forced, or if what
           # survived slicing still defines something.

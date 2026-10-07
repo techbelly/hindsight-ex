@@ -29,12 +29,14 @@ module Hindsight
     # +present_files+   project files that exist at this step (for requires)
     # +referenced+      constant names referenced by kept code anywhere
     def initialize(project, path, source, runtime_lines:, present_files:, referenced:, load_lines: Set.new,
-                   referenced_methods: Set.new, whole_classes: Set.new, used_methods: nil, missing_methods: Set.new)
+                   referenced_methods: Set.new, whole_classes: Set.new, used_methods: nil, missing_methods: Set.new,
+                   load_counts: {})
       @project = project
       @path = path
       @source = source
       @runtime = runtime_lines
       @load = load_lines
+      @load_counts = load_counts
       @referenced_methods = referenced_methods
       @whole_classes = whole_classes
       @used_methods = used_methods # nil means "don't prune attributes"
@@ -585,7 +587,7 @@ module Hindsight
       return true if body.nil? # an empty method is structure, not a reason to keep its class
       needed =
         if multiline?(d) then runtime?(body) || loaded?(body)
-        else @runtime.include?(first_line(d))
+        else @runtime.include?(first_line(d)) || @load_counts.fetch(first_line(d), 0) > 1 # defined once, then called
         end
       return false unless needed
       process_def_body(body, d.loc.end&.line)

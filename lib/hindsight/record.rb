@@ -18,7 +18,7 @@ module Hindsight
 
   # The output of the probe, loaded.
   class Record
-    attr_reader :root, :ruby_version, :baseline, :tests, :require_edges
+    attr_reader :root, :ruby_version, :baseline, :baseline_counts, :tests, :require_edges
 
     def self.load(path)
       new(JSON.parse(File.read(path)))
@@ -29,6 +29,9 @@ module Hindsight
       @root = data["root"]
       @ruby_version = data["ruby"]
       @baseline = data["baseline"].transform_values { |c| c["lines"].keys.map(&:to_i).to_set }
+      # How often each line ran at load: a one-line method whose line ran
+      # more than once was called, not just defined.
+      @baseline_counts = data["baseline"].transform_values { |c| c["lines"].to_h { |l, n| [l.to_i, n] } }
       # [from_file, method, argument] as recorded; resolved by the builder.
       @require_edges = (data["requires"] || []).map { |from, m, arg| [from, m.to_sym, arg] }
       @tests = data["tests"].map do |t|
@@ -48,6 +51,7 @@ module Hindsight
     def restrict_to(files)
       keep = files.to_set
       @baseline.select! { |f, _| keep.include?(f) }
+      @baseline_counts.select! { |f, _| keep.include?(f) }
       @tests.each { |t| t.lines.select! { |f, _| keep.include?(f) } }
       @require_edges.select! { |from, _, _| keep.include?(from) }
       self

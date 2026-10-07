@@ -20,15 +20,20 @@ class SlicerTest < Minitest::Test
   def slice(src, present: [], referenced: [], methods: [], whole: [], used: nil, missing: [], path: "lib/x.rb")
     runtime = Set.new
     load = Set.new
+    counts = {}
     clean = src.lines.each_with_index.map do |line, i|
       runtime << i + 1 if line =~ /\s*#R\s*$/
-      load << i + 1 if line =~ /\s*#L\s*$/
-      line.sub(/\s*#[RL]\s*$/, "\n")
+      if line =~ /\s*#L(\d*)\s*$/
+        load << i + 1
+        counts[i + 1] = ($1.empty? ? 1 : $1.to_i)
+      end
+      line.sub(/\s*#[RL]\d*\s*$/, "\n")
     end.join
     Hindsight::Slicer.new(FakeProject.new(present), path, clean,
                           runtime_lines: runtime, present_files: present.to_set,
                           referenced: referenced.to_set, referenced_methods: methods.to_set,
                           whole_classes: whole.to_set, used_methods: used&.to_set, missing_methods: missing.to_set,
+                          load_counts: counts,
                           load_lines: load).slice.text
   end
 
@@ -564,5 +569,19 @@ class SlicerTest < Minitest::Test
     RUBY
     assert_includes out, "alias new! new"
     refute_includes out, "def new("
+  end
+
+  def test_one_line_methods_called_at_load_are_structure
+    out = slice(<<~RUBY)
+      class B
+        def development?; environment == :development end   #L3
+        def test?; environment == :test end                  #L
+        def go      #L
+          1         #R
+        end
+      end
+    RUBY
+    assert_includes out, "def development?"
+    refute_includes out, "def test?"
   end
 end
