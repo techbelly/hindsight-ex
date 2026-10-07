@@ -327,7 +327,7 @@ module Hindsight
       result
     end
 
-    METHOD_REFERENCING = %i[alias_method private protected public module_function
+    METHOD_REFERENCING = %i[alias_method private protected public module_function ruby2_keywords
                             private_class_method public_class_method].freeze
 
     # `BooleanOption = BoolOption` is structure, but when BoolOption was
@@ -364,8 +364,17 @@ module Hindsight
     end
 
     def method_reference?(s)
+      s = reference_node(s)
       node?(s) && (s.type == :alias ||
         (s.type == :send && s.children[0].nil? && METHOD_REFERENCING.include?(s.children[1])))
+    end
+
+    # `ruby2_keywords(:use) if respond_to?(:ruby2_keywords, true)`: the
+    # statement is a modifier conditional, the reference is inside it.
+    def reference_node(s)
+      return s unless node?(s) && s.type == :if && s.loc.respond_to?(:end) && s.loc.end.nil?
+      inner = s.children[1..2].compact
+      inner.size == 1 && node?(inner[0]) && %i[send alias].include?(inner[0].type) ? inner[0] : s
     end
 
     # `alias get []` or `private :foo` are structure, but they name methods.
@@ -373,20 +382,21 @@ module Hindsight
     # trimmed to the names that remain. +drop+ is called for each to remove.
     def prune_method_references(kept, dropped, &drop)
       return if dropped.empty?
-      kept.each do |s, keep|
-        next unless keep && method_reference?(s)
-        scope = reference_scope(s)
+      kept.each do |stmt, keep|
+        next unless keep && method_reference?(stmt)
+        scope = reference_scope(stmt)
+        s = reference_node(stmt)
         if s.type == :alias
-          drop.call(s) if sym_name(s.children[1])&.then { |n| dropped.include?([scope, n]) }
+          drop.call(stmt) if sym_name(s.children[1])&.then { |n| dropped.include?([scope, n]) }
         else
           args = s.children[2..]
           next unless args.any? && args.all? { |a| node?(a) && a.type == :sym }
           if s.children[1] == :alias_method
-            drop.call(s) if dropped.include?([scope, sym_name(args.last)])
+            drop.call(stmt) if dropped.include?([scope, sym_name(args.last)])
           else
             keep_args = args.reject { |a| dropped.include?([scope, sym_name(a)]) }
             if keep_args.empty?
-              drop.call(s)
+              drop.call(stmt)
             elsif keep_args.size < args.size && !multiline?(s)
               from, to = args.first.loc.expression, args.last.loc.expression
               @editor.replace(from.line, from.column, to.end.column, keep_args.map { |a| a.loc.expression.source }.join(", "))
@@ -612,15 +622,40 @@ module Hindsight
     # that ran while the file loaded (`Dir[...].each { require }`) is
     # structure, a deferred one (`it`, `before`, `define_method`) lives or
     # dies by the tests, and a `describe` lives only if an `it` inside does.
+    DEFINERS = %i[define_method define_singleton_method].freeze
+
     def process_block(b, ctx)
       body = b.children.last
       if ctx == :load
+        return process_definer(b, body) if definer?(b)
         return false unless executed?(body) || runtime_in_call?(b)
         return false unless process_body(body, body_context(body))
       else
         return false unless executed?(b)
         process_body(body, body_context(body))
       end
+      :substantive
+    end
+
+    def definer?(b)
+      send = b.children[0]
+      node?(send) && send.type == :send && DEFINERS.include?(send.children[1])
+    end
+
+    # `define_method(name) do ... end` defines a method, so it is judged like
+    # a def: needed if its body ran or something names the method. With a
+    # dynamic name there is nothing to check, so it stays whole if the call
+    # ran at load.
+    def process_definer(b, body)
+      send = b.children[0]
+      arg = send.children[2]
+      name = node?(arg) && arg.type == :sym ? arg.children[0] : nil
+      return false unless loaded?(send) || runtime?(send)
+      needed = name.nil? || executed?(body) || @referenced_methods.include?(name) ||
+               (@used_methods && @used_methods.include?(name)) || @whole_depth > 0 ||
+               (@project.test_file?(@path))
+      return false unless needed
+      process_body(body, :run) if executed?(body)
       :substantive
     end
 
@@ -656,6 +691,12 @@ module Hindsight
 
       unless surgical
         return ctx == :load unless executed?(n)
+        # `def x ... end if cond`: the definition decides, and the whole
+        # statement goes with it, modifier included.
+        bodies = branches(n).select { |b| node?(b) }
+        if ctx == :load && bodies.size == 1 && %i[def defs class module sclass].include?(bodies[0].type)
+          return process_stmt(bodies[0], :load)
+        end
         branches(n).each { |b| process_body(b, :run) if node?(b) && multiline?(b) }
         return :substantive
       end
@@ -849,10 +890,12 @@ module Hindsight
       process_body(body, :run)
 
       boundaries = resbodies.map { |r| r.loc.keyword.line } + [n.loc.else&.line, end_line].compact
+      keep = resbodies.map { |r| r.children[2].nil? || executed?(r.children[2]) }
+      # `else` needs at least one rescue clause to hang off; keep the first.
+      keep[0] = true if node?(else_body) && keep.none?
       resbodies.each_with_index do |r, i|
-        rbody = r.children[2]
-        if rbody.nil? || executed?(rbody)
-          process_body(rbody, :run)
+        if keep[i]
+          process_body(r.children[2], :run)
         else
           @editor.delete(r.loc.keyword.line, boundaries[i + 1] - 1)
         end

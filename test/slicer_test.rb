@@ -471,4 +471,80 @@ class SlicerTest < Minitest::Test
     refute_includes out, "alias_method"
     assert_equal Set[:a, :b, :b=, :c, :d], Hindsight::Slicer.defined_methods("def a; end\nattr_accessor :b\nalias_method :c, :a\nalias d a\n")
   end
+
+  def test_a_rescue_with_else_keeps_one_clause
+    out = slice(<<~RUBY)
+      def f
+        begin            #R
+          work           #R
+        rescue IOError
+          retry
+        else
+          after          #R
+        end
+      end
+    RUBY
+    assert_includes out, "rescue IOError"
+    assert_includes out, "else\n    after"
+    refute_includes out, "retry"
+  end
+
+  def test_a_definition_under_a_modifier_goes_with_its_modifier
+    out = slice(<<~RUBY)
+      class H < Hash
+        def self.[](*args)            #L
+          new.merge!(Hash[*args])
+        end if RUBY_VERSION >= "3.0"
+
+        def used      #L
+          1           #R
+        end
+      end
+    RUBY
+    assert_equal "class H < Hash\n  def used\n    1\n  end\nend\n", out
+  end
+
+  def test_method_references_under_a_modifier_are_pruned_too
+    out = slice(<<~RUBY)
+      class B
+        class << self
+          def use(m)
+            m
+          end
+          ruby2_keywords(:use) if respond_to?(:ruby2_keywords, true)
+          def go        #L
+            1           #R
+          end
+        end
+      end
+    RUBY
+    refute_includes out, "ruby2_keywords"
+    assert_includes out, "def go"
+  end
+
+  def test_define_method_is_judged_like_a_def
+    src = <<~RUBY
+      module D
+        def self.delegate(*names)                  #L
+          names.each do |name|                     #L
+            define_method(name) do |*args|         #L
+              target.send(name, *args)
+            end
+            private name                           #L
+          end
+        end
+        define_method(:unused) do                  #L
+          1
+        end
+        define_method(:wanted) do                  #L
+          2
+        end
+        delegate :get                              #L
+      end
+    RUBY
+    out = slice(src, used: [:wanted])
+    assert_includes out, "define_method(name) do |*args|"
+    assert_includes out, "define_method(:wanted)"
+    refute_includes out, "unused"
+  end
 end

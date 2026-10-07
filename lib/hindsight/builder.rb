@@ -487,10 +487,33 @@ module Hindsight
       git("config", "user.email", "hindsight@example.invalid")
       # Verification runs leave droppings; keep them out of the history.
       File.write(File.join(@out, ".git", "info", "exclude"), %w[coverage/ tmp/ log/ pkg/ .bundle/ .rspec_status .byebug_history].join("\n") + "\n")
+      share_bundle_config
+    end
+
+    # If the target keeps its gems in a local path (`bundle config path
+    # vendor/bundle`), point the output tree at the same gems so `bundle
+    # exec` works there too. Lives under .bundle/, which the history ignores.
+    def share_bundle_config
+      config = File.join(@project.root, ".bundle", "config")
+      return unless File.exist?(config)
+      text = File.read(config).gsub(/^(BUNDLE_PATH:\s*)"?([^"\n]+)"?$/) do
+        path = Regexp.last_match(2)
+        "#{Regexp.last_match(1)}\"#{File.expand_path(path, @project.root)}\""
+      end
+      FileUtils.mkdir_p(File.join(@out, ".bundle"))
+      File.write(File.join(@out, ".bundle", "config"), text)
     end
 
     def write_scaffold
-      @project.scaffold_files.each { |f| copy(f) }
+      @project.scaffold_files(except: @record.loaded_files).each do |f|
+        if @project.ruby_file?(f) && Slicer.parseable?(source(f))
+          dest = File.join(@out, f)
+          FileUtils.mkdir_p(File.dirname(dest))
+          File.write(dest, Comments.strip(source(f)))
+        else
+          copy(f)
+        end
+      end
     end
 
     def write_everything

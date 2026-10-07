@@ -143,8 +143,12 @@ module Hindsight
         Hindsight::Probe.note_require(loc.absolute_path || loc.path, :require, path) if loc
         super
       rescue StandardError, ScriptError => e
-        raise unless LENIENT && path.to_s.start_with?(ROOT) && path.to_s.match?(%r{/(test|spec|features)/})
-        warn "hindsight: skipped #{path}: #{e.class}: #{e.message.lines.first}"
+        test_path = path.to_s.start_with?(ROOT) && path.to_s.match?(%r{/(test|spec|features)/})
+        # A test file that does not exist yet is not an error in a sliced
+        # tree; any other failure to load one is, unless we are being lenient.
+        missing = e.is_a?(LoadError) && e.path.to_s == path.to_s && !File.exist?(path.to_s) && !File.exist?("#{path}.rb")
+        raise unless test_path && (LENIENT || missing)
+        warn "hindsight: skipped #{path}: #{e.class}: #{e.message.lines.first}" unless missing
         false
       end
 

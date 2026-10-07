@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "open3"
+require "set"
 
 module Hindsight
   # The target project: where it is, which files it has, how to run its tests,
@@ -33,7 +34,45 @@ module Hindsight
     end
 
     def ruby_files = files.select { |f| ruby_file?(f) }
-    def scaffold_files = files.reject { |f| ruby_file?(f) }
+
+    # Files that exist before any test: everything that is not Ruby, plus the
+    # Ruby that the build system itself loads (version files required by
+    # gemspecs, and so on), followed transitively.
+    def scaffold_files(except: [])
+      files.reject { |f| ruby_file?(f) } + build_support_files(except: except)
+    end
+
+    BUILD_FILES = /(\A|\/)(Gemfile|Rakefile|.*\.gemspec)\z/
+
+    # +except+: files the test suite loads; those belong to the story, and
+    # the search does not continue through them.
+    def build_support_files(except: [])
+      skip = except.to_set
+      found = Set.new
+      queue = files.grep(BUILD_FILES)
+      until queue.empty?
+        f = queue.shift
+        static_requires(f).each do |t|
+          next if found.include?(t) || skip.include?(t)
+          found << t
+          queue << t
+        end
+      end
+      found.to_a.sort
+    end
+
+    # Project files a file requires, from its source alone.
+    def static_requires(file)
+      src = read(file)
+      found = []
+      src.scan(/^\s*require(_relative)?\s*\(?\s*(['"])([^'"]+)\2/) do |rel, _q, arg|
+        t = resolve_require(rel ? :require_relative : :require, arg, file)
+        found << t if t
+      end
+      found
+    rescue StandardError
+      []
+    end
 
     def ruby_file?(path) = path.end_with?(".rb")
 

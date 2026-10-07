@@ -43,6 +43,16 @@ module Hindsight
 
     def test(id) = @by_id.fetch(id)
 
+    # Forget files outside the project's own tree (a vendored bundle inside
+    # the target directory, say).
+    def restrict_to(files)
+      keep = files.to_set
+      @baseline.select! { |f, _| keep.include?(f) }
+      @tests.each { |t| t.lines.select! { |f, _| keep.include?(f) } }
+      @require_edges.select! { |from, _, _| keep.include?(from) }
+      self
+    end
+
     def replace_tests(tests)
       @tests = tests
       @by_id = tests.to_h { |t| [t.id, t] }

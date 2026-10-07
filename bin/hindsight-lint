@@ -1,0 +1,32 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+# Slice the files for step N of a target and report any output Ruby cannot
+# parse, with context. Usage: hindsight-lint TARGET N
+require "bundler/setup"
+require "prism"
+require_relative "../lib/hindsight"
+
+target, n = ARGV
+project = Hindsight::Project.new(target)
+work = File.join(__dir__, "../work", project.name)
+rec = Hindsight::Record.load(File.join(work, "coverage.json")).restrict_to(project.files)
+steps = Hindsight::Orderer.load(File.join(work, "plan.json"))
+union = Hash.new { |h, k| h[k] = Set.new }
+steps.first(n.to_i).each { |s| rec.test(s.id).lines.each { |f, ls| union[f].merge(ls) } }
+present = union.keys.to_set
+bad = 0
+rec.loaded_files.sort.each do |f|
+  src = project.read(f)
+  next unless Hindsight::Slicer.parseable?(src)
+  res = Hindsight::Slicer.new(project, f, src, runtime_lines: union[f], present_files: present,
+                              referenced: Set.new, load_lines: rec.baseline[f] || Set.new, used_methods: Set.new).slice
+  r = Prism.parse(res.text)
+  next if r.errors.empty?
+  bad += 1
+  err = r.errors.first
+  l = err.location.start_line
+  puts "== #{f}: #{err.message} (line #{l})"
+  lines = res.text.lines
+  puts lines[[l - 6, 0].max...[l + 3, lines.size].min].map.with_index([l - 6, 0].max + 1) { |t, i| format("%4d  %s", i, t) }.join
+end
+puts(bad.zero? ? "all slices parse" : "#{bad} bad slice(s)")

@@ -70,7 +70,7 @@ module Hindsight
     end
 
     def order(project, paths)
-      rec = Record.load(paths[:coverage])
+      rec = Record.load(paths[:coverage]).restrict_to(project.files)
       steps = Orderer.new(rec, project).order
       Orderer.save(steps, paths[:plan])
       File.write(paths[:graph], Graph.dot(steps, rec))
@@ -78,7 +78,7 @@ module Hindsight
     end
 
     def build(project, paths, test_cmd, opts)
-      rec = Record.load(paths[:coverage])
+      rec = Record.load(paths[:coverage]).restrict_to(project.files)
       steps = Orderer.load(paths[:plan])
       Builder.new(project: project, record: rec, steps: steps, out: paths[:repo],
                   test_command: test_cmd, verify: opts[:verify], limit: opts[:limit]).build
