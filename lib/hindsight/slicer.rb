@@ -29,7 +29,7 @@ module Hindsight
     # +present_files+   project files that exist at this step (for requires)
     # +referenced+      constant names referenced by kept code anywhere
     def initialize(project, path, source, runtime_lines:, present_files:, referenced:, load_lines: Set.new,
-                   referenced_methods: Set.new, whole_classes: Set.new, used_methods: nil)
+                   referenced_methods: Set.new, whole_classes: Set.new, used_methods: nil, missing_methods: Set.new)
       @project = project
       @path = path
       @source = source
@@ -38,12 +38,14 @@ module Hindsight
       @referenced_methods = referenced_methods
       @whole_classes = whole_classes
       @used_methods = used_methods # nil means "don't prune attributes"
+      @missing_methods = missing_methods # defined by the project, but in no kept file
       @whole_depth = 0
       @present = present_files
       @referenced = referenced
       @editor = LineEditor.new(source)
       @ast = self.class.parse(source)
       @dropped_defs = Set.new   # [scope, name] of methods dropped anywhere in this file
+      @dropped_attrs = Set.new  # attribute methods pruned from the body being processed
       @method_refs = []         # kept statements that name methods (alias, private ...)
       @singleton_depth = 0      # inside `class << self`?
     end
@@ -166,11 +168,52 @@ module Hindsight
       names
     end
 
+    # Method names this source defines: defs, attributes, alias targets.
+    def self.defined_methods(source)
+      names = Set.new
+      walk(parse(source)) do |n|
+        case n.type
+        when :def then names << n.children[0]
+        when :defs then names << n.children[1]
+        when :alias then names << n.children[0].children[0] if n.children[0].type == :sym
+        when :send
+          next unless n.children[0].nil?
+          args = n.children[2..].select { |a| a.is_a?(Parser::AST::Node) && a.type == :sym }.map { |a| a.children[0] }
+          case n.children[1]
+          when :attr_reader, :attr then names.merge(args)
+          when :attr_writer then names.merge(args.map { |a| :"#{a}=" })
+          when :attr_accessor then names.merge(args).merge(args.map { |a| :"#{a}=" })
+          when :alias_method then names << args.first if args.first
+          when :define_method then names << args.first if args.first
+          end
+        end
+      end
+      names
+    end
+
     # Every method name this source calls, plus those it looks up by symbol.
+    # A used alias makes its target used too.
     def self.used_methods(source)
       names = Set.new
-      walk(parse(source)) { |n| names << n.children[1] if %i[send csend].include?(n.type) }
-      names | referenced_methods(source)
+      aliases = []
+      walk(parse(source)) do |n|
+        case n.type
+        when :send, :csend
+          names << n.children[1]
+          if n.children[0].nil? && n.children[1] == :alias_method && n.children[2..].all? { |a| a.is_a?(Parser::AST::Node) && a.type == :sym }
+            aliases << n.children[2..].map { |a| a.children[0] }
+          end
+        when :alias
+          aliases << n.children.map { |c| c.children[0] } if n.children.all? { |c| c.type == :sym }
+        end
+      end
+      names |= referenced_methods(source)
+      loop do
+        added = aliases.select { |new, old| names.include?(new) && !names.include?(old) }.map(&:last)
+        break if added.empty?
+        names.merge(added)
+      end
+      names
     end
 
     # Method names this source looks up by symbol: `method(:partial)`,
@@ -259,6 +302,9 @@ module Hindsight
       kept = stmts.map { |s| [s, process_stmt(s, ctx)] }
       if ctx == :load
         dropped = kept.filter_map { |s, keep| def_key(s) unless keep }.to_set
+        dropped.merge(@dropped_attrs)
+        @missing_methods.each { |m| dropped << [:instance, m] << [:singleton, m] }
+        @dropped_attrs = Set.new
         @dropped_defs.merge(dropped)
         prune_method_references(kept, dropped) { |st| kept.find { |e| e[0].equal?(st) }[1] = false }
         prune_constant_aliases(kept)
@@ -457,6 +503,8 @@ module Hindsight
              else (read | write)
              end
       keep &= names
+      scope = @singleton_depth > 0 ? :singleton : :instance
+      (names - keep).each { |n| @dropped_attrs << [scope, n] << [scope, :"#{n}="] }
       return false if keep.empty?
       new_kind = kind
       if kind == :attr_accessor

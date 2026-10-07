@@ -7,7 +7,7 @@ here=$(cd "$(dirname "$0")/.." && pwd)
 target=$1; n=$2; cmd=${3:-'ruby -Ilib -Itest -e '"'"'Dir["test/**/*_test.rb"].sort.each { |f| require File.expand_path(f) }'"'"''}
 out=$here/work/$(basename $target)/debug-step-$n
 "$here/bin/hindsight" build "$target" --limit $n --out "$out" >/dev/null 2>&1
-cd "$out" && git checkout -q HEAD~1
+cd "$out" && git checkout -q HEAD~2
 echo "== files at step $n:"; git ls-files | grep '\.rb$' | tr '\n' ' '; echo
 echo "== tests:"
 eval "$cmd" 2>&1 | grep -vE '^\.+$|^$|^Run options|^# Running|^Finished|DEPRECATION|Coverage report|Line coverage|Stopped processing' | head -${LINES_SHOWN:-30}

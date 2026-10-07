@@ -17,7 +17,7 @@ class SlicerTest < Minitest::Test
     def test_file?(path) = path.start_with?("test/")
   end
 
-  def slice(src, present: [], referenced: [], methods: [], whole: [], used: nil, path: "lib/x.rb")
+  def slice(src, present: [], referenced: [], methods: [], whole: [], used: nil, missing: [], path: "lib/x.rb")
     runtime = Set.new
     load = Set.new
     clean = src.lines.each_with_index.map do |line, i|
@@ -28,7 +28,7 @@ class SlicerTest < Minitest::Test
     Hindsight::Slicer.new(FakeProject.new(present), path, clean,
                           runtime_lines: runtime, present_files: present.to_set,
                           referenced: referenced.to_set, referenced_methods: methods.to_set,
-                          whole_classes: whole.to_set, used_methods: used&.to_set,
+                          whole_classes: whole.to_set, used_methods: used&.to_set, missing_methods: missing.to_set,
                           load_lines: load).slice.text
   end
 
@@ -439,5 +439,36 @@ class SlicerTest < Minitest::Test
     RUBY
     assert_includes out, "private_constant :KEEP\n"
     refute_includes out, "GONE"
+  end
+
+  def test_aliases_keep_their_attribute_alive_and_follow_it_when_pruned
+    src = <<~RUBY
+      class Tag
+        attr_reader :nodelist, :parse_context
+        alias_method :options, :parse_context
+        def go      #L
+          1         #R
+        end
+      end
+    RUBY
+    out = slice(src, used: [:options, :parse_context])
+    assert_includes out, "attr_reader :parse_context"
+    assert_includes out, "alias_method :options, :parse_context"
+    out = slice(src, used: [:nodelist])
+    refute_includes out, "alias_method"
+    assert_equal Set[:options, :parse_context], Hindsight::Slicer.used_methods("alias_method :options, :parse_context\nx.options\n") & Set[:options, :parse_context]
+  end
+
+  def test_aliases_to_methods_missing_from_other_files_are_pruned
+    out = slice(<<~RUBY, missing: [:options])
+      class Include < Tag
+        alias_method :parse_context, :options
+        def go     #L
+          1        #R
+        end
+      end
+    RUBY
+    refute_includes out, "alias_method"
+    assert_equal Set[:a, :b, :b=, :c, :d], Hindsight::Slicer.defined_methods("def a; end\nattr_accessor :b\nalias_method :c, :a\nalias d a\n")
   end
 end

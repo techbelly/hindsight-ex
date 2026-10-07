@@ -109,6 +109,7 @@ module Hindsight
       methods = Set.new
       whole = Set.new
       used = Set.new
+      missing = Set.new
       outputs = {}
       kept = nil
       MAX_PASSES.times do
@@ -131,7 +132,7 @@ module Hindsight
           refs = EVERYTHING if @structural_now.include?(f)
           res = Slicer.new(@project, f, source(f), runtime_lines: union[f], present_files: exists,
                            referenced: refs, referenced_methods: methods, whole_classes: whole,
-                           used_methods: refs.equal?(EVERYTHING) ? nil : used,
+                           used_methods: refs.equal?(EVERYTHING) ? nil : used, missing_methods: missing,
                            load_lines: @record.baseline[f] || Set.new).slice
           text = Comments.strip(res.text)
           # A file stays if a test ran code in it, if it was forced, or if what
@@ -147,8 +148,11 @@ module Hindsight
         meths = new_outputs.values.map { |t| Slicer.referenced_methods(t) }.reduce(Set.new, :|)
         wholes = new_outputs.values.map { |t| Slicer.whole_classes(t) }.reduce(Set.new, :|)
         uses = new_outputs.values.map { |t| Slicer.used_methods(t) }.reduce(Set.new, :|)
-        changed = new_outputs != outputs || refs != referenced || meths != methods || wholes != whole || uses != used
+        kept_defined = new_outputs.values.map { |t| Slicer.defined_methods(t) }.reduce(Set.new, :|)
+        gone = project_defined_methods - kept_defined
+        changed = new_outputs != outputs || refs != referenced || meths != methods || wholes != whole || uses != used || gone != missing
         used = uses
+        missing = gone
         outputs = new_outputs
         kept = outputs.keys.to_set
         referenced = refs | @forced
@@ -233,6 +237,13 @@ module Hindsight
     end
 
     def source(f) = @sources[f] ||= @project.read(f)
+
+    # Every method name defined anywhere in the project's own Ruby.
+    def project_defined_methods
+      @project_defined_methods ||= @project.ruby_files
+        .select { |f| Slicer.parseable?(source(f)) }
+        .map { |f| Slicer.defined_methods(source(f)) }.reduce(Set.new, :|)
+    end
 
     # Spreads commit dates across the original project's real lifetime, in
     # proportion to lines added, so the log reads like a history.
