@@ -46,29 +46,44 @@ module Hindsight
 
       union = Hash.new { |h, k| h[k] = Set.new }
       previous_sizes = {}
-      @steps.each_with_index do |step, i|
-        n = i + 1
-        test = @record.test(step.id)
+      pending = @steps.map { |st| @record.test(st.id) }
+      n = 0
+      until pending.empty?
+        test = pending.shift
+        n += 1
         test.lines.each { |f, ls| union[f].merge(ls) }
         outputs = slice_all(union)
         sync(outputs)
         ok = nil
         escalated = []
+        folded = []
         if @verify
           ok = verify(n, test)
           unless ok
             ok, escalated, outputs = escalate(n, test, union)
           end
+          if ok && pending.any?
+            folded = fold_passing(union, pending)
+            unless folded.empty?
+              pending -= folded
+              # Merge the whole footprint, not just the test code: later steps
+              # may route this test down paths whose lines it would have brought.
+              folded.each { |t| t.lines.each { |f, ls| union[f].merge(ls) } }
+              outputs = slice_all(union)
+              sync(outputs)
+            end
+          end
         end
         sizes = outputs.transform_values { |t| t.lines.size }
-        commit(test.description, step_body(n, test, sizes, previous_sizes, ok, escalated))
+        commit(test.description, step_body(n, test, sizes, previous_sizes, ok, escalated, folded))
         previous_sizes = sizes
-        progress(n, test, step.gain, ok, escalated)
+        progress(n, pending.size, test, ok, escalated, folded)
       end
+      @step_count = n
 
       write_everything
       commit("Everything else", "Code no test reached, and files the test suite never loaded.")
-      @log.puts "\nBuilt #{@steps.size + 2} commits in #{@out}"
+      @log.puts "\nBuilt #{@step_count + 2} commits in #{@out} (#{@steps.size} tests)"
       @log.puts "Escalations: #{@escalations.map { |n, f, l| l == :class ? "class #{f} at step #{n}" : "#{f} to #{l} at step #{n}" }.join('; ')}" if @escalations.any?
       @log.puts "#{@failures.size} step(s) still failing: #{@failures.map(&:first).join(', ')}" if @failures.any?
       @out
@@ -201,6 +216,41 @@ module Hindsight
     end
 
     def source(f) = @sources[f] ||= @project.read(f)
+
+    # ----- folding -------------------------------------------------------
+
+    # A test that already passes against this step's code was not what drove
+    # it; it is another example of the same behaviour and belongs in this
+    # commit. Try every pending test against the current library with all
+    # their test code present, and return those that pass.
+    def fold_passing(union, pending)
+      trial = Hash.new { |h, k| h[k] = Set.new }
+      union.each { |f, ls| trial[f] = ls.dup }
+      pending.each { |t| t.lines.each { |f, ls| trial[f].merge(ls) if @project.test_file?(f) } }
+      trial_outputs = slice_all(trial)
+      # Library files exactly as committed; only the test files are richer.
+      committed = slice_all(union)
+      tree = committed.merge(trial_outputs.select { |f, _| @project.test_file?(f) })
+      sync(tree)
+      results = run_with_probe
+      return [] unless results
+      passed = results.tests.select(&:passed).map(&:id).to_set
+      pending.select { |t| passed.include?(t.id) }
+    ensure
+      sync(committed) if committed
+    end
+
+    # Run the suite in the output directory under the probe; nil on a crash.
+    def run_with_probe
+      Dir.mktmpdir("hindsight") do |tmp|
+        out = File.join(tmp, "fold.json")
+        env = { "HINDSIGHT_ROOT" => @out, "HINDSIGHT_OUT" => out }
+        Project.run_in(@out, @test_command, env: env, rubyopt: "-I#{Recorder::LIB} -rhindsight/probe")
+        File.exist?(out) ? Record.load(out) : nil
+      end
+    rescue StandardError
+      nil
+    end
 
     # ----- escalation ----------------------------------------------------
 
@@ -410,12 +460,16 @@ module Hindsight
       git("commit", "-q", "--allow-empty", "-m", subject, "-m", body)
     end
 
-    def step_body(n, test, sizes, previous, ok, escalated)
+    def step_body(n, test, sizes, previous, ok, escalated, folded = [])
       deltas = sizes.map { |f, s| [f, s - (previous[f] || 0)] }.reject { |_, d| d.zero? }
       prod = deltas.reject { |f, _| @project.test_file?(f) }.sum(&:last)
       lines = []
-      lines << "Step #{n} of #{@steps.size}. #{prod} line#{'s' unless prod == 1} of production code."
+      lines << "Step #{n}. #{prod} line#{'s' unless prod == 1} of production code."
       lines << "Test: #{test.file}:#{test.line}"
+      unless folded.empty?
+        lines << "" << "Also passing now:"
+        folded.each { |t| lines << "  #{t.description} (#{t.file}:#{t.line})" }
+      end
       unless deltas.empty?
         lines << ""
         lines << "Changed:"
@@ -446,10 +500,11 @@ module Hindsight
       File.exist?(path) ? File.read(path) : ""
     end
 
-    def progress(n, test, gain, ok, escalated)
+    def progress(n, remaining, test, ok, escalated, folded)
       mark = ok.nil? ? " " : (ok ? "✓" : "✗")
       note = escalated.map { |f, l| " [#{f} -> #{l}]" }.join
-      @log.puts format("%s %3d/%-3d +%-4d %s%s", mark, n, @steps.size, gain, test.description[0, 80], note)
+      note += " (+#{folded.size} folded)" unless folded.empty?
+      @log.puts format("%s %4d  %4d left  %s%s", mark, n, remaining, test.description[0, 80], note)
     end
   end
 end

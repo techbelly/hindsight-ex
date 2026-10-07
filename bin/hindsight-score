@@ -1,0 +1,22 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+# Score a built history for readability. Usage: hindsight-score REPO_DIR...
+require "open3"
+
+ARGV.each do |repo|
+  log, = Open3.capture2("git", "-C", repo, "log", "--reverse", "--format=%H%x00%s%x00%b%x00%x01")
+  commits = log.split("\x01").map { |c| c.strip.split("\x00") }.select { |c| c.size >= 2 }
+  steps = commits[1..-2] || []
+  prod = steps.map { |_, _, body| body.to_s[/(\d+) lines? of production/, 1].to_i }
+  tests = steps.map { |_, _, body| body.to_s[/^Test: (\S+?):/, 1] }
+  hops = tests.each_cons(2).count { |a, b| a != b }
+  escal = steps.count { |_, _, body| body.to_s.include?("needed ") }
+  sorted = prod.sort
+  pct = ->(p) { sorted[(sorted.size * p).floor.clamp(0, sorted.size - 1)] || 0 }
+  last_stat, = Open3.capture2("git", "-C", repo, "show", "--stat", "--format=", commits.last[0])
+  left = last_stat.lines.grep(%r{^ lib/}).sum { |l| l[/\|\s+(\d+)/, 1].to_i }
+  puts File.basename(File.dirname(repo)).ljust(10) +
+       "commits #{steps.size.to_s.rjust(5)}  zero-code #{prod.count(0).to_s.rjust(4)}  " \
+       "median #{pct.(0.5).to_s.rjust(3)}  p90 #{pct.(0.9).to_s.rjust(3)}  max #{sorted.last.to_s.rjust(3)}  " \
+       "hops #{hops.to_s.rjust(4)}  escalations #{escal.to_s.rjust(2)}  left-for-last #{left.to_s.rjust(4)}"
+end
