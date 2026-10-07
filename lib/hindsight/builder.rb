@@ -335,14 +335,15 @@ module Hindsight
       # A file that timed out recently loops forever in this tree; leave it
       # out for a while, doubling the wait each time it happens again.
       @fold_skip ||= {}
-      files = pending.map(&:file).uniq.reject { |f| (@fold_skip[f] || 0) > @step_now }
+      counts = pending.group_by(&:file).transform_values(&:size)
+      files = counts.keys.reject { |f| (@fold_skip[f] || 0) > @step_now }
       results = parallel_map(files) do |f|
-        out, status, rec = run_with_probe(only_file: f, timeout: fold_timeout)
+        out, status, rec = run_with_probe(only_file: f, timeout: fold_timeout(counts[f]))
         if status.nil? && out.include?("timed out")
           @fold_backoff ||= Hash.new(1)
           @fold_skip[f] = @step_now + @fold_backoff[f]
-          @fold_backoff[f] *= 2
-          @log.puts "    fold: #{f} timed out; skipping it for #{@fold_backoff[f] / 2} step(s)" if ENV["HINDSIGHT_TRACE"]
+          @fold_backoff[f] = [@fold_backoff[f] * 2, MAX_FOLD_BACKOFF].min
+          @log.puts "    fold: #{f} timed out; skipping it for #{@fold_skip[f] - @step_now} step(s)" if ENV["HINDSIGHT_TRACE"]
         end
         rec
       end.compact
@@ -356,11 +357,14 @@ module Hindsight
 
     FOLD_TIMEOUT = 15
     VERIFY_TIMEOUT = 120
+    MAX_FOLD_BACKOFF = 8
 
-    # Fold runs get a budget scaled to how long the suite takes here: a big
-    # test file exercising error paths is slower than a hang is obvious.
-    def fold_timeout
-      [(@last_verify_seconds || 0) * 10, FOLD_TIMEOUT].max.clamp(FOLD_TIMEOUT, VERIFY_TIMEOUT)
+    # A fold run's budget scales with the file: a few hundred tests all
+    # exercising error paths in a partial tree take a while, and that is not
+    # a hang. Also scaled by how long verification takes here.
+    def fold_timeout(tests_in_file)
+      per_test = [(@last_verify_seconds || 0) / [@included.size, 1].max, 0.05].max
+      [FOLD_TIMEOUT + per_test * 10 * tests_in_file, FOLD_TIMEOUT].max.clamp(FOLD_TIMEOUT, 240)
     end
 
     def parallel_map(items, workers: Etc.nprocessors)
