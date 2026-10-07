@@ -65,9 +65,12 @@ module Hindsight
       lines = ["## Contents", ""]
       lines << "#{steps.size} steps in #{chapters.count} chapters."
       lines << ""
+      seen = Hash.new(0)
       chapters.each do |chapter|
         file = test_file(chapter.first)
-        lines << "### #{chapter_title(file)}"
+        title = chapter_title(file)
+        seen[title] += 1
+        lines << "### #{title}#{' (continued)' if seen[title] > 1}"
         lines << ""
         chapter.each do |sha, subject, body|
           extra = body.scan(/^  .*\(test/).size
