@@ -17,7 +17,7 @@ class SlicerTest < Minitest::Test
     def test_file?(path) = path.start_with?("test/")
   end
 
-  def slice(src, present: [], referenced: [], methods: [], whole: [], path: "lib/x.rb")
+  def slice(src, present: [], referenced: [], methods: [], whole: [], used: nil, path: "lib/x.rb")
     runtime = Set.new
     load = Set.new
     clean = src.lines.each_with_index.map do |line, i|
@@ -28,7 +28,7 @@ class SlicerTest < Minitest::Test
     Hindsight::Slicer.new(FakeProject.new(present), path, clean,
                           runtime_lines: runtime, present_files: present.to_set,
                           referenced: referenced.to_set, referenced_methods: methods.to_set,
-                          whole_classes: whole.to_set,
+                          whole_classes: whole.to_set, used_methods: used&.to_set,
                           load_lines: load).slice.text
   end
 
@@ -403,5 +403,26 @@ class SlicerTest < Minitest::Test
     RUBY
     refute_includes out, "BooleanOption"
     assert_includes out, "class Used"
+  end
+
+  def test_attributes_and_constants_wait_until_used
+    src = <<~RUBY
+      class Option
+        DEFAULT = { a: 1 }
+        LIMIT = 3
+        attr_reader :flags, :desc
+        attr_accessor :value
+        def go              #L
+          flags             #R
+        end
+      end
+    RUBY
+    out = slice(src, used: [:flags, :value=], referenced: [:LIMIT])
+    assert_includes out, "attr_reader :flags\n"
+    refute_includes out, "desc"
+    assert_includes out, "attr_writer :value"
+    assert_includes out, "LIMIT = 3"
+    refute_includes out, "DEFAULT"
+    assert_includes slice(src), "attr_reader :flags, :desc" # no usage info: keep all
   end
 end

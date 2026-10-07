@@ -100,6 +100,7 @@ module Hindsight
       referenced = @forced.dup
       methods = Set.new
       whole = Set.new
+      used = Set.new
       outputs = {}
       kept = nil
       MAX_PASSES.times do
@@ -122,6 +123,7 @@ module Hindsight
           refs = EVERYTHING if @structural_now.include?(f)
           res = Slicer.new(@project, f, source(f), runtime_lines: union[f], present_files: exists,
                            referenced: refs, referenced_methods: methods, whole_classes: whole,
+                           used_methods: refs.equal?(EVERYTHING) ? nil : used,
                            load_lines: @record.baseline[f] || Set.new).slice
           text = Comments.strip(res.text)
           # A file stays if a test ran code in it, if it was forced, or if what
@@ -136,7 +138,9 @@ module Hindsight
         refs = new_outputs.values.map { |t| Slicer.referenced_constants(t) }.reduce(Set.new, :|)
         meths = new_outputs.values.map { |t| Slicer.referenced_methods(t) }.reduce(Set.new, :|)
         wholes = new_outputs.values.map { |t| Slicer.whole_classes(t) }.reduce(Set.new, :|)
-        changed = new_outputs != outputs || refs != referenced || meths != methods || wholes != whole
+        uses = new_outputs.values.map { |t| Slicer.used_methods(t) }.reduce(Set.new, :|)
+        changed = new_outputs != outputs || refs != referenced || meths != methods || wholes != whole || uses != used
+        used = uses
         outputs = new_outputs
         kept = outputs.keys.to_set
         referenced = refs | @forced
@@ -301,7 +305,7 @@ module Hindsight
         break if tried >= MAX_CLASS_ATTEMPTS
         next unless @levels[f] == :sliced && Slicer.parseable?(source(f))
         already = outputs_declare(f)
-        (Slicer.declared_constants(source(f)) - already - @forced).each do |name|
+        (Slicer.declared_constants(source(f)) | Slicer.defined_constants(source(f))).subtract(already).subtract(@forced).each do |name|
           break if tried >= MAX_CLASS_ATTEMPTS
           tried += 1
           @forced << name

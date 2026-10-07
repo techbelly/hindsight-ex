@@ -29,7 +29,7 @@ module Hindsight
     # +present_files+   project files that exist at this step (for requires)
     # +referenced+      constant names referenced by kept code anywhere
     def initialize(project, path, source, runtime_lines:, present_files:, referenced:, load_lines: Set.new,
-                   referenced_methods: Set.new, whole_classes: Set.new)
+                   referenced_methods: Set.new, whole_classes: Set.new, used_methods: nil)
       @project = project
       @path = path
       @source = source
@@ -37,6 +37,7 @@ module Hindsight
       @load = load_lines
       @referenced_methods = referenced_methods
       @whole_classes = whole_classes
+      @used_methods = used_methods # nil means "don't prune attributes"
       @whole_depth = 0
       @present = present_files
       @referenced = referenced
@@ -163,6 +164,13 @@ module Hindsight
         names << recv.children[1] if recv.is_a?(Parser::AST::Node) && recv.type == :const
       end
       names
+    end
+
+    # Every method name this source calls, plus those it looks up by symbol.
+    def self.used_methods(source)
+      names = Set.new
+      walk(parse(source)) { |n| names << n.children[1] if %i[send csend].include?(n.type) }
+      names | referenced_methods(source)
     end
 
     # Method names this source looks up by symbol: `method(:partial)`,
@@ -374,11 +382,16 @@ module Hindsight
       when :send
         if ctx == :load && (target = require_target(s))
           @present.include?(target)
+        elsif ctx == :load && attribute_declaration?(s)
+          prune_attributes(s)
         elsif (d = s.children[2..].find { |c| node?(c) && %i[def defs].include?(c.type) })
           process_def(d) # `private def foo` / `module_function def foo`
         else
           plain(s, ctx)
         end
+      when :casgn
+        # A constant is structure, but one nothing names yet can wait.
+        ctx == :run ? plain(s, ctx) : (@referenced.include?(s.children[1]) || !node?(s.children[2]) || side_effects?(s.children[2]))
       when :if then process_if(s, ctx)
       when :case then process_case(s, ctx)
       when :kwbegin then process_kwbegin(s, ctx)
@@ -390,6 +403,55 @@ module Hindsight
       else
         plain(s, ctx)
       end
+    end
+
+    # Does evaluating this constant's value do something worth keeping even
+    # if nothing names the constant? Defining classes or modules does.
+    def side_effects?(value)
+      return false unless node?(value)
+      return true if value.type == :send && %i[new].include?(value.children[1]) &&
+                     node?(value.children[0]) && value.children[0].type == :const &&
+                     %i[Class Module Struct].include?(value.children[0].children[1])
+      return true if %i[block numblock].include?(value.type)
+      false
+    end
+
+    ATTRS = %i[attr_reader attr_writer attr_accessor].freeze
+
+    def attribute_declaration?(s)
+      s.children[0].nil? && ATTRS.include?(s.children[1]) &&
+        s.children[2..].any? && s.children[2..].all? { |a| node?(a) && a.type == :sym }
+    end
+
+    # Keep an attribute only if kept code calls it. An accessor used only one
+    # way becomes a reader or a writer.
+    def prune_attributes(s)
+      return true if @used_methods.nil?
+      kind = s.children[1]
+      names = s.children[2..].map { |a| a.children[0] }
+      read = names.select { |n| @used_methods.include?(n) }
+      write = names.select { |n| @used_methods.include?(:"#{n}=") }
+      keep = case kind
+             when :attr_reader then read
+             when :attr_writer then write
+             else (read | write)
+             end
+      keep &= names
+      return false if keep.empty?
+      new_kind = kind
+      if kind == :attr_accessor
+        new_kind = :attr_reader if write.empty?
+        new_kind = :attr_writer if read.empty?
+      end
+      return true if keep.size == names.size && new_kind == kind
+      return true if multiline?(s)
+      args = s.children[2..]
+      from, to = args.first.loc.expression, args.last.loc.expression
+      kept_src = args.select { |a| keep.include?(a.children[0]) }.map { |a| a.loc.expression.source }.join(", ")
+      @editor.replace(from.line, from.column, to.end.column, kept_src)
+      sel = s.loc.selector
+      @editor.replace(sel.line, sel.column, sel.end.column, new_kind.to_s) if new_kind != kind
+      true
     end
 
     def plain(s, ctx)
