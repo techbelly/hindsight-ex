@@ -35,6 +35,8 @@ module Hindsight
       @levels = Hash.new(:sliced)
       @structural_now = Set.new
       @forced = Set.new # constants to treat as referenced from now on
+      @folded = {}      # tests folded into earlier steps, by id
+      @last_failures = []
       @sources = {}
       @written = Set.new
     end
@@ -66,9 +68,12 @@ module Hindsight
             folded = fold_passing(union, pending)
             unless folded.empty?
               pending -= folded
-              # Merge the whole footprint, not just the test code: later steps
-              # may route this test down paths whose lines it would have brought.
-              folded.each { |t| t.lines.each { |f, ls| union[f].merge(ls) } }
+              # Only their test code joins now. If a later step routes one of
+              # them down a path that needs more, its footprint is merged then.
+              folded.each do |t|
+                @folded[t.id] = t
+                t.lines.each { |f, ls| union[f].merge(ls) if @project.test_file?(f) }
+              end
               outputs = slice_all(union)
               sync(outputs)
             end
@@ -84,7 +89,7 @@ module Hindsight
       write_everything
       commit("Everything else", "Code no test reached, and files the test suite never loaded.")
       @log.puts "\nBuilt #{@step_count + 2} commits in #{@out} (#{@steps.size} tests)"
-      @log.puts "Escalations: #{@escalations.map { |n, f, l| l == :class ? "class #{f} at step #{n}" : "#{f} to #{l} at step #{n}" }.join('; ')}" if @escalations.any?
+      @log.puts "Escalations: #{@escalations.map { |n, f, l| l == :class || l == :footprint ? "#{l} #{f[0, 50]} at step #{n}" : "#{f} to #{l} at step #{n}" }.join('; ')}" if @escalations.any?
       @log.puts "#{@failures.size} step(s) still failing: #{@failures.map(&:first).join(', ')}" if @failures.any?
       @out
     end
@@ -232,7 +237,7 @@ module Hindsight
       committed = slice_all(union)
       tree = committed.merge(trial_outputs.select { |f, _| @project.test_file?(f) })
       sync(tree)
-      results = run_with_probe
+      _out, _status, results = run_with_probe
       return [] unless results
       passed = results.tests.select(&:passed).map(&:id).to_set
       pending.select { |t| passed.include?(t.id) }
@@ -240,16 +245,17 @@ module Hindsight
       sync(committed) if committed
     end
 
-    # Run the suite in the output directory under the probe; nil on a crash.
-    def run_with_probe
+    # Run the suite in the output directory under the probe.
+    # Returns [output, status, record_or_nil].
+    def run_with_probe(lenient: true)
       Dir.mktmpdir("hindsight") do |tmp|
-        out = File.join(tmp, "fold.json")
+        out = File.join(tmp, "run.json")
         env = { "HINDSIGHT_ROOT" => @out, "HINDSIGHT_OUT" => out }
-        Project.run_in(@out, @test_command, env: env, rubyopt: "-I#{Recorder::LIB} -rhindsight/probe")
-        File.exist?(out) ? Record.load(out) : nil
+        env["HINDSIGHT_LENIENT"] = "1" if lenient
+        output, status = Project.run_in(@out, @test_command, env: env, rubyopt: "-I#{Recorder::LIB} -rhindsight/probe")
+        record = File.exist?(out) ? (Record.load(out) rescue nil) : nil
+        [output, status, record]
       end
-    rescue StandardError
-      nil
     end
 
     # ----- escalation ----------------------------------------------------
@@ -260,6 +266,20 @@ module Hindsight
       made = []
       last_log = read_log(n)
       candidates = candidate_files(last_log, test)
+
+      # Zeroth rung: a test folded into an earlier step now fails because the
+      # code has grown around it. Give it the lines it recorded.
+      broken = @last_failures.filter_map { |id| @folded[id] }
+      if broken.any?
+        broken.each { |t| t.lines.each { |f, ls| union[f].merge(ls) }; @folded.delete(t.id) }
+        outputs = slice_all(union)
+        sync(outputs)
+        if verify(n, test, quiet: true, label: "folded")
+          broken.each { |t| made << [t.description[0, 60], :footprint]; @escalations << [n, t.id, :footprint] }
+          @failures.reject! { |fn, _| fn == n }
+          return [true, made, outputs]
+        end
+      end
 
       # First rung: the recorded footprint may be missing lazily initialised
       # code another test paid for. Re-record this test alone and merge.
@@ -477,7 +497,13 @@ module Hindsight
       end
       unless ok.nil?
         lines << "" << "Verification: #{ok ? 'green' : 'RED'}"
-        escalated.each { |f, level| lines << (level == :class ? "  needed class #{f}" : "  needed #{f} as #{level}") }
+        escalated.each do |f, level|
+          lines << case level
+                   when :class then "  needed class #{f}"
+                   when :footprint then "  needed the code recorded for: #{f}"
+                   else "  needed #{f} as #{level}"
+                   end
+        end
       end
       lines.join("\n")
     end
@@ -486,9 +512,12 @@ module Hindsight
 
     def log_dir = File.join(File.dirname(@out), "verify")
 
+    # Run the suite in the output tree. Green means every test passed. The
+    # probe rides along so we know which tests failed, for the ladder.
     def verify(n, test, quiet: false, label: nil)
-      out, status = Project.run_in(@out, @test_command)
-      return true if status.success?
+      out, status, results = run_with_probe(lenient: false)
+      @last_failures = results ? results.tests.reject(&:passed).map(&:id) : []
+      return true if status&.success?
       @failures << [n, test.id] unless quiet || @failures.any? { |fn, _| fn == n }
       FileUtils.mkdir_p(log_dir)
       File.write(File.join(log_dir, format("step-%04d%s.log", n, label ? "-#{label}" : "")), "#{test.id}\n\n#{out}")

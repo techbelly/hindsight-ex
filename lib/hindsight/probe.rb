@@ -132,11 +132,20 @@ module Hindsight
 
     # --- Require graph -----------------------------------------------------
 
+    # With HINDSIGHT_LENIENT set, a test file that fails to load is skipped
+    # rather than aborting the run (Minitest's autorun would otherwise run
+    # nothing). Used when probing which pending tests already pass.
+    LENIENT = ENV["HINDSIGHT_LENIENT"] == "1"
+
     module RequireHook
       def require(path)
         loc = caller_locations(1, 1)&.first
         Hindsight::Probe.note_require(loc.absolute_path || loc.path, :require, path) if loc
         super
+      rescue StandardError, ScriptError => e
+        raise unless LENIENT && path.to_s.start_with?(ROOT) && path.to_s.match?(%r{/(test|spec|features)/})
+        warn "hindsight: skipped #{path}: #{e.class}: #{e.message.lines.first}"
+        false
       end
 
       def require_relative(path)
