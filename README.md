@@ -75,16 +75,21 @@ project's own test dependencies must be installed for its Ruby.
 
 | project  | tests | lines | commits | median step | p90 | hops | escalations | time |
 |----------|------:|------:|--------:|------------:|----:|-----:|------------:|-----:|
-| slop     |   100 |  1.7k |      45 |           6 |  35 |    9 | 5 | 15 s |
-| mustache |   112 |  1.9k |      51 |          12 |  47 |   12 | 2 | 40 s |
-| liquid   | 1,062 |  7.1k |   1,064 |           0 |     |      | 0 | 16 m |
+| slop     |   100 |  1.7k |      43 |           7 |  36 |    9 | 3 | 35 s |
+| mustache |   112 |  1.9k |      49 |          12 |  55 |   12 | 2 | 45 s |
+| sinatra  |   805 |  2.8k |     111 |           4 |  20 |   41 | 4 | 25 m |
+| liquid   | 1,062 |  7.1k |     358 |           7 |  31 |  134 | 18 | 50 m |
 
-Liquid's row predates folding and will shrink considerably.
+Every commit in every history above passes the tests it contains. "Step"
+is the production lines a commit adds; escalations are places the ladder
+had to intervene. The first step of a project is its boot cost: requiring
+liquid or sinatra executes hundreds of lines of class-level setup, which is
+load-time structure and arrives together.
 
-Every step of every history above is green. Liquid's first step is large
-(about 1,300 lines) because its test helper builds the default Environment at
-load, which drags in the tag and filter tables. That is honest: nothing less
-boots.
+Sinatra's core tests run with
+`bundle exec ruby -Ilib -Itest -e 'ARGV.each { |f| require File.expand_path(f) }' test/{base,...}_test.rb`
+after `bundle config set --local path vendor/bundle && bundle install` in the
+clone. Published histories: github.com/techbelly/{slop,mustache,sinatra,liquid}-hindsight.
 
 Improving the prose further, for instance with a language model reading each
 diff, is deliberately left as a separate pass over the finished history.
